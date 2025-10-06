@@ -1,0 +1,4 @@
+provider: api
+model: text-embedding-3-small
+dims: 1536
+batch_size: 64

@@ -1,0 +1,11 @@
+# Placeholder Traefik static configuration. Define routers and services as endpoints are exposed.
+log:
+  level: INFO
+api:
+  insecure: true
+providers:
+  file:
+    filename: /etc/traefik/traefik.yml
+entryPoints:
+  web:
+    address: ":80"

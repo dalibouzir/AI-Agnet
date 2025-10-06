@@ -1,0 +1,6 @@
+{
+  "/page": "app/page.js",
+  "/upload/page": "app/upload/page.js",
+  "/api/ingest/route": "app/api/ingest/route.js",
+  "/chat/page": "app/chat/page.js"
+}

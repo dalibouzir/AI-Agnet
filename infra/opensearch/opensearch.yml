@@ -1,0 +1,6 @@
+cluster.name: opensearch
+network.host: 0.0.0.0
+discovery.type: single-node
+bootstrap.memory_lock: true
+plugins.security.disabled: true
+compatibility.override_main_response_version: true

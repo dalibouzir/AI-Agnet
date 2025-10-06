@@ -1,0 +1,8 @@
+version: "3.9"
+
+services:
+  opensearch:
+    # Placeholder override: swap image or credentials when targeting managed OpenSearch.
+    # Use this file to differentiate between self-hosted OSS and cloud-managed variants.
+    environment:
+      node.name: opensearch

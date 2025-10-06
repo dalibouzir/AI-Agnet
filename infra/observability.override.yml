@@ -1,0 +1,4 @@
+services:
+  minio:
+    environment:
+      MINIO_PROMETHEUS_AUTH_TYPE: public

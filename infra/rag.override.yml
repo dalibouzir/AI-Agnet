@@ -1,0 +1,4 @@
+services:
+  rag:
+    environment:
+      OPENSEARCH_URL: http://host.docker.internal:9200

@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info:
+  title: RAG API
+  version: 0.1.0
+  description: Stub contract for retrieval-augmented generation endpoints.
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                example:
+                  status: ok

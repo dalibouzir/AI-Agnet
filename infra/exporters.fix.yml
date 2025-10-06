@@ -1,0 +1,13 @@
+services:
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    command: ["--redis.addr=redis://redis:6379"]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+
+  opensearch-exporter:
+    image: prometheuscommunity/elasticsearch-exporter:v1.7.0
+    command:
+      - "--es.uri=http://opensearch:9200"
+      - "--es.all"

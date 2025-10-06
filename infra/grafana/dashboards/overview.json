@@ -1,0 +1,13 @@
+{
+  "title": "AI Business Agent Overview",
+  "panels": [
+    {
+      "type": "text",
+      "title": "Stub Dashboard",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "content": "Dashboard placeholder. Wire real metrics once services expose /metrics."
+      }
+    }
+  ]
+}

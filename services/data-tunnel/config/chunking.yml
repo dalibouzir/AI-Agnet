@@ -1,0 +1,5 @@
+strategy:
+  max_tokens: 700
+  overlap_tokens: 80
+  table_mode: "row"
+  slide_mode: "per_slide"

@@ -1,0 +1,6 @@
+checks:
+  not_empty: true
+  language_detect: true
+  ocr_conf_min: 0.55
+  table_schema_sanity: true
+  date_unit_sanity: true
