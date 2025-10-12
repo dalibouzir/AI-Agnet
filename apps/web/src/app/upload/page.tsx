@@ -37,6 +37,11 @@ type IngestionRecord = {
   labels?: string[];
   size?: number | null;
   mime?: string | null;
+  object_key?: string | null;
+  object_suffix?: string | null;
+  original_basename?: string | null;
+  doc_type?: string | null;
+  metadata?: Record<string, unknown> | null;
   error?: string | null;
   dlq_reason?: string | null;
 };
@@ -71,6 +76,47 @@ function relativeTime(iso?: string | null): string {
   return formatter.format(days, 'day');
 }
 
+function describeValue(value: unknown, fallback = '—'): string {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function extractApiError(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return 'Upload failed';
+  const data = payload as Record<string, unknown>;
+  const detail = data.detail ?? data.message ?? data.error ?? data.reason;
+  return describeValue(detail, 'Upload failed');
+}
+
+function guessDocType(file: File): string {
+  const mime = (file.type || '').toLowerCase();
+  if (mime.includes('/')) {
+    const subtype = mime.split('/', 2)[1]?.split(';', 1)[0] ?? '';
+    if (subtype) {
+      const clean = subtype.split('+', 1)[0];
+      if (clean === 'plain') return 'txt';
+      if (clean === 'jpeg') return 'jpg';
+      if (clean === 'msword') return 'doc';
+      if (clean === 'vnd.openxmlformats-officedocument.wordprocessingml.document') return 'docx';
+      if (clean === 'vnd.ms-powerpoint') return 'ppt';
+      if (clean === 'vnd.openxmlformats-officedocument.presentationml.presentation') return 'pptx';
+      if (clean === 'vnd.ms-excel') return 'xls';
+      if (clean === 'vnd.openxmlformats-officedocument.spreadsheetml.sheet') return 'xlsx';
+      return clean;
+    }
+  }
+  const parts = file.name.split('.');
+  const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : '';
+  if (ext === 'jpeg') return 'jpg';
+  if (ext === 'text') return 'txt';
+  return ext || 'binary';
+}
+
 export default function UploadPage() {
   const reduceMotion = usePrefersReducedMotion();
   const [tenantId, setTenantId] = useState('tenant-demo');
@@ -99,13 +145,14 @@ export default function UploadPage() {
       const res = await fetch(`/api/ingest?${params.toString()}`, { cache: 'no-store' });
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
-        throw new Error(payload?.detail ?? payload?.message ?? 'Unable to load ingestions');
+        throw new Error(extractApiError(payload) || 'Unable to load ingestions');
       }
       const payload = await res.json();
       setIngestions(Array.isArray(payload?.items) ? payload.items : []);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load ingestions');
+      const message = err instanceof Error ? err.message : describeValue(err, 'Unable to load ingestions');
+      setError(message || 'Unable to load ingestions');
     } finally {
       setIsLoading(false);
     }
@@ -132,21 +179,45 @@ export default function UploadPage() {
           const formData = new FormData();
           formData.append('tenant_id', tenantId);
           formData.append('source', source || '#console-upload');
+          formData.append('doc_type', guessDocType(file));
+          const sanitizedName = file.name ? file.name.replace(/^\.+/, '').trim() : '';
+          const requestedObject = sanitizedName || `upload-${Date.now()}`;
+          formData.append('object', requestedObject);
           formData.append('file', file);
           if (uploader) formData.append('uploader', uploader);
           trimmedLabels.forEach((label) => formData.append('labels', label));
+          const metadataPayload = {
+            original_filename: file.name,
+            size: file.size,
+            source,
+            uploader,
+            labels: trimmedLabels,
+          };
+          formData.append('metadata', JSON.stringify(metadataPayload));
 
+          console.log('[upload] sending', {
+            name: file.name,
+            size: file.size,
+            tenant: tenantId,
+            docType: guessDocType(file),
+            labels: trimmedLabels,
+          });
           const res = await fetch('/api/ingest', { method: 'POST', body: formData });
+          console.log('[upload] response status', res.status);
           const payload = await res.json().catch(() => ({}));
           if (!res.ok) {
-            throw new Error(payload?.detail ?? payload?.message ?? 'Upload failed');
+            console.error('[upload] upstream error', payload);
+            throw new Error(extractApiError(payload));
           }
+          console.log('[upload] success payload', payload);
         }
         setMessage(`${files.length} file${files.length === 1 ? '' : 's'} queued for ingestion.`);
         setError(null);
         await fetchIngestions();
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Upload failed');
+        console.error('[upload] request failed', err);
+        const message = err instanceof Error ? err.message : describeValue(err, 'Upload failed');
+        setError(message || 'Upload failed');
       } finally {
         setIsUploading(false);
       }
@@ -271,12 +342,25 @@ export default function UploadPage() {
                       ) : (
                         ingestions.map((item) => {
                           const displayStatus = STATUS_LABEL[item.status ?? ''] ?? 'Queued';
+                          const metadata =
+                            item.metadata && typeof item.metadata === 'object' ? (item.metadata as Record<string, unknown>) : {};
+                          const originalName =
+                            typeof metadata.original_filename === 'string' ? (metadata.original_filename as string) : undefined;
+                          const displayName =
+                            item.original_basename ||
+                            originalName ||
+                            item.object_suffix ||
+                            item.object_key ||
+                            item.ingest_id;
+                          const rawError = item.error ?? item.dlq_reason;
+                          const errorText = rawError ? describeValue(rawError, '') : null;
                           return (
                             <tr key={item.ingest_id} className="align-top">
                               <td className="px-5 py-4 text-sm text-[var(--text)]">
-                                <div className="font-medium">{item.ingest_id}</div>
+                                <div className="font-medium">{displayName}</div>
                                 <p className="mt-1 text-[11px] uppercase tracking-[0.32em] text-muted">
                                   {item.tenant_id} • {item.source || '#console-upload'}
+                                  {item.doc_type ? ` • ${item.doc_type}` : ''}
                                 </p>
                                 {item.labels?.length ? (
                                   <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted">
@@ -287,7 +371,9 @@ export default function UploadPage() {
                                     ))}
                                   </div>
                                 ) : null}
-                                {item.error && <p className="mt-2 text-xs text-[var(--danger)]">{item.error}</p>}
+                                {errorText ? (
+                                  <pre className="mt-2 whitespace-pre-wrap text-xs text-[var(--danger)]">{errorText}</pre>
+                                ) : null}
                               </td>
                               <td className="px-5 py-4">
                                 <span

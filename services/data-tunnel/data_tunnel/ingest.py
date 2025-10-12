@@ -4,7 +4,10 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import magic
+try:
+    import magic
+except ImportError:  # pragma: no cover - libmagic optional
+    magic = None
 from langdetect import LangDetectException, detect
 
 from pipeline.models import Manifest
@@ -15,10 +18,13 @@ from .text_extract import TextExtractionResult, extract_text
 logger = logging.getLogger(__name__)
 _settings = get_settings()
 
-try:
-    _MAGIC = magic.Magic(mime=True)
-except Exception:  # pragma: no cover - libmagic missing at runtime
+if magic is None:
     _MAGIC = None
+else:
+    try:
+        _MAGIC = magic.Magic(mime=True)
+    except Exception:  # pragma: no cover - libmagic missing at runtime
+        _MAGIC = None
 
 DEFAULT_PARSER_ALLOWLIST = {
     "pdf",
@@ -34,12 +40,12 @@ DEFAULT_PARSER_ALLOWLIST = {
 }
 
 CHUNKING_PRESETS: Dict[str, Dict[str, int]] = {
-    "default": {"max_tokens": 700, "overlap_tokens": 80},
-    "pdf": {"max_tokens": 900, "overlap_tokens": 120},
-    "docx": {"max_tokens": 800, "overlap_tokens": 100},
-    "txt": {"max_tokens": 700, "overlap_tokens": 80},
+    "default": {"max_tokens": 600, "overlap_tokens": 80},
+    "pdf": {"max_tokens": 650, "overlap_tokens": 90},
+    "docx": {"max_tokens": 650, "overlap_tokens": 90},
+    "txt": {"max_tokens": 600, "overlap_tokens": 80},
     "csv": {"max_tokens": 400, "overlap_tokens": 40},
-    "pptx": {"max_tokens": 500, "overlap_tokens": 60},
+    "pptx": {"max_tokens": 520, "overlap_tokens": 60},
     "xlsx": {"max_tokens": 450, "overlap_tokens": 50},
     "image": {"max_tokens": 600, "overlap_tokens": 80},
 }
@@ -103,19 +109,29 @@ def ingest_manifest(manifest: Manifest, blob: bytes) -> Dict[str, Any]:
         ocr_languages=_settings.ocr_langs,
     )
 
-    doc_type = extraction.doc_type or "binary"
+    requested_doc_type = manifest.doc_type
+    doc_type = extraction.doc_type or requested_doc_type or "binary"
     if not _allowed_parser(doc_type):
         logger.info("Doc type %s not enabled via PARSERS; storing raw text only", doc_type)
 
     language = _detect_language(extraction.text)
     ingested_at = datetime.utcnow().isoformat()
 
+    user_metadata_raw = manifest.metadata if isinstance(manifest.metadata, dict) else {}
+    user_metadata: Dict[str, Any] = dict(user_metadata_raw)
+    options_candidate = user_metadata.pop("options", None)
+    options_config = {}
+    if isinstance(options_candidate, dict):
+        options_config = dict(options_candidate)
+
     metadata: Dict[str, Any] = {
         "tenant_id": manifest.tenant_id,
         "source": manifest.source,
+        "path": manifest.path,
+        "raw_path": manifest.path,
         "size": manifest.size,
         "labels": manifest.labels,
-        "filename": filename,
+        "filename": manifest.original_basename or filename,
         "mime": mime,
         "doc_type": doc_type,
         "uploader": manifest.uploader,
@@ -134,6 +150,21 @@ def ingest_manifest(manifest: Manifest, blob: bytes) -> Dict[str, Any]:
             "languages": _settings.ocr_langs,
         }
 
+    if manifest.object_key:
+        metadata["object"] = manifest.object_key
+    if manifest.object_suffix:
+        metadata["object_suffix"] = manifest.object_suffix
+    if manifest.original_basename:
+        metadata["original_basename"] = manifest.original_basename
+
+    if requested_doc_type and requested_doc_type != doc_type:
+        metadata["doc_type_requested"] = requested_doc_type
+
+    if user_metadata:
+        metadata["user_metadata"] = user_metadata
+    if options_config:
+        metadata["options"] = options_config
+
     chunk_strategy = _chunk_strategy_for(doc_type)
 
     canonical: Dict[str, Any] = {
@@ -148,6 +179,7 @@ def ingest_manifest(manifest: Manifest, blob: bytes) -> Dict[str, Any]:
         "ingested_at": ingested_at,
         "chunk_strategy": chunk_strategy,
         "metadata": metadata,
+        "options": options_config,
         "pages": extraction.pages,
         "tables": extraction.tables,
         "ocr_applied": extraction.ocr_applied,

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytesseract
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,13 @@ try:  # Optional dependency; used for PDFs with textual content.
     import pdfplumber
 except ImportError:  # pragma: no cover - best effort fallback
     pdfplumber = None
+
+try:  # Lightweight fallback when pdfplumber cannot parse the document.
+    from pdfminer.high_level import extract_text as pdfminer_extract_text
+    from pdfminer.pdfparser import PDFSyntaxError
+except ImportError:  # pragma: no cover - optional dependency already required
+    pdfminer_extract_text = None
+    PDFSyntaxError = Exception
 
 try:  # Generic structured document parsing fallback.
     from unstructured.partition.auto import partition
@@ -55,25 +62,61 @@ class TextExtractionResult:
 
 def _extract_pdf(data: bytes) -> TextExtractionResult:
     if not pdfplumber:
-        logger.debug("pdfplumber not available; returning binary placeholder")
-        return TextExtractionResult(text="", doc_type="pdf")
+        logger.debug("pdfplumber not available; using pdfminer fallback")
+        return _extract_pdf_pdfminer(data)
 
     pages: List[str] = []
     tables: List[str] = []
-    with pdfplumber.open(io.BytesIO(data)) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            pages.append(text.strip())
-            table_texts: List[str] = []
-            try:
-                for table in page.extract_tables():
-                    table_rows = ["\t".join(cell or "" for cell in row) for row in table]
-                    table_texts.append("\n".join(table_rows))
-            except Exception as exc:  # pragma: no cover - pdfplumber quirks
-                logger.debug("Table extraction failed: %s", exc)
-            tables.extend(table_texts)
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                pages.append(text.strip())
+                table_texts: List[str] = []
+                try:
+                    for table in page.extract_tables():
+                        table_rows = ["\t".join(cell or "" for cell in row) for row in table]
+                        table_texts.append("\n".join(table_rows))
+                except Exception as exc:  # pragma: no cover - pdfplumber quirks
+                    logger.debug("Table extraction failed: %s", exc)
+                tables.extend(table_texts)
+    except PDFSyntaxError as exc:
+        logger.warning("pdfplumber failed to parse PDF: %s", exc)
+        ocr_result = _run_ocrmypdf(data, "eng")
+        if ocr_result:
+            return ocr_result
+        return _extract_pdf_pdfminer(data)
+    except Exception as exc:  # pragma: no cover - rare corrupt PDFs
+        logger.warning("pdfplumber unexpected error: %s", exc)
+        ocr_result = _run_ocrmypdf(data, "eng")
+        if ocr_result:
+            return ocr_result
+        return _extract_pdf_pdfminer(data)
+
     combined_text = "\n\n".join(filter(None, pages + tables))
-    return TextExtractionResult(text=combined_text, doc_type="pdf", pages=pages, tables=tables)
+    if combined_text.strip():
+        return TextExtractionResult(text=combined_text, doc_type="pdf", pages=pages, tables=tables)
+
+    ocr_result = _run_ocrmypdf(data, "eng")
+    if ocr_result:
+        return ocr_result
+
+    # If pdfplumber succeeded but produced no text, try pdfminer once more.
+    return _extract_pdf_pdfminer(data)
+
+
+def _extract_pdf_pdfminer(data: bytes) -> TextExtractionResult:
+    if not pdfminer_extract_text:
+        logger.debug("pdfminer not available; returning empty PDF extraction")
+        return TextExtractionResult(text="", doc_type="pdf")
+    try:
+        text = pdfminer_extract_text(io.BytesIO(data)) or ""
+        pages = [page.strip() for page in text.split("\f") if page.strip()]
+        combined = "\n\n".join(pages) if pages else text
+        return TextExtractionResult(text=combined, doc_type="pdf", pages=pages)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("pdfminer failed to extract PDF text: %s", exc)
+        return TextExtractionResult(text="", doc_type="pdf")
 
 
 def _extract_docx(data: bytes) -> TextExtractionResult:
@@ -243,7 +286,15 @@ def extract_text(
 
     if mime.startswith("image/") or extension in {"png", "jpg", "jpeg", "tiff", "bmp"}:
         if enable_ocr:
-            return _extract_image(data, ocr_languages)
+            try:
+                return _extract_image(data, ocr_languages)
+            except UnidentifiedImageError:
+                fallback_text = data.decode("utf-8", errors="ignore")
+                return TextExtractionResult(
+                    text=fallback_text,
+                    doc_type="binary",
+                    metadata={"mode": "fallback-bytes"},
+                )
         return TextExtractionResult(text="", doc_type="image")
 
     if mime in {"application/json"} or extension == "json":
@@ -254,8 +305,11 @@ def extract_text(
         return fallback
 
     if enable_ocr:
-        ocr_guess = _extract_image(data, ocr_languages)
-        if ocr_guess.text.strip():
+        try:
+            ocr_guess = _extract_image(data, ocr_languages)
+        except UnidentifiedImageError:
+            ocr_guess = None
+        if ocr_guess and ocr_guess.text.strip():
             ocr_guess.doc_type = "image"
             return ocr_guess
 

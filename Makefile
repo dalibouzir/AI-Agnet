@@ -1,19 +1,10 @@
-.PHONY: up down build fmt lint sysctl
+build:
+	cd infra && docker compose build data-tunnel data-tunnel-worker
 
-COMPOSE_CMD = docker compose --env-file .env -f infra/docker-compose.yml
+up:
+	cd infra && docker compose up -d opensearch minio redis nats db data-tunnel data-tunnel-worker
 
-up:      ## start local stack
-	$(COMPOSE_CMD) up -d --build
-
-down:    ## stop local stack
-	$(COMPOSE_CMD) down -v
-
-build:   ## build images
-	$(COMPOSE_CMD) build
-fmt:
-	pre-commit run -a
-lint:
-	pre-commit run -a
-
-sysctl:  ## configure vm.max_map_count for OpenSearch (requires Docker Desktop 4.24+)
-	docker run --rm --privileged --pid=host alpine:3.20 sh -c 'sysctl -w vm.max_map_count=262144'
+green:
+	curl -s -X PUT "http://localhost:9200/rag-chunks/_settings" \
+	 -H 'Content-Type: application/json' -d '{"index":{"number_of_replicas":0}}' >/dev/null || true
+	./scripts/setup_dashboards.sh || true

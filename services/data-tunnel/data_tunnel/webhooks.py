@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Request
@@ -19,6 +20,15 @@ from workers.tasks import parse_normalize
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhooks"])
+
+
+def doc_type_from_mime(mime: str | None, filename: str | None) -> str:
+    if mime and "/" in mime:
+        subtype = mime.split("/", 1)[1].strip()
+        if subtype:
+            return subtype.split("+", 1)[0].lower()
+    extension = Path(filename or "").suffix.lstrip(".").lower()
+    return extension or "binary"
 
 
 def _tenant_from_key(key: str) -> str | None:
@@ -85,6 +95,11 @@ async def minio_webhook(request: Request) -> Dict[str, Any]:
             size = obj.get("size") or len(blob)
             checksum = hashlib.sha256(blob).hexdigest()
             mime = obj.get("contentType") or mimetypes.guess_type(key)[0] or "application/octet-stream"
+            original_basename = Path(key).name or "upload.bin"
+            suffix_parts = key.split("/")
+            object_suffix_parts = suffix_parts[6:] if len(suffix_parts) > 6 else suffix_parts[-1:]
+            object_suffix = "/".join(object_suffix_parts) or original_basename
+            doc_type_hint = doc_type_from_mime(mime, original_basename)
 
             ingest_id = str(uuid.uuid4())
             manifest_payload = {
@@ -92,11 +107,16 @@ async def minio_webhook(request: Request) -> Dict[str, Any]:
                 "tenant_id": tenant_id,
                 "source": source,
                 "path": path,
+                "object_key": key,
+                "object_suffix": object_suffix,
+                "original_basename": original_basename,
+                "doc_type": doc_type_hint,
                 "checksum": checksum,
                 "size": size,
                 "mime": mime,
                 "uploader": uploader,
                 "labels": [],
+                "metadata": {},
                 "created_at": datetime.utcnow(),
             }
             _insert_manifest(manifest_payload)

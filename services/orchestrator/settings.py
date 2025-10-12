@@ -19,6 +19,8 @@ class Settings(BaseModel):
     llm_request_timeout_s: float = Field(default=25.0)
     llm_max_prompt_chars: int = Field(default=6000, gt=0)
     llm_max_context_chunks: int = Field(default=5, gt=0)
+    answer_max_sources: int = Field(default=5, gt=0)
+    answer_excerpt_chars: int = Field(default=320, gt=40)
 
 
 def _coerce_float(env_name: str, default: float) -> float:
@@ -50,4 +52,6 @@ def get_settings() -> Settings:
         llm_request_timeout_s=_coerce_float("LLM_REQUEST_TIMEOUT_S", 25.0),
         llm_max_prompt_chars=_coerce_int("LLM_MAX_PROMPT_CHARS", 6000),
         llm_max_context_chunks=_coerce_int("LLM_MAX_CONTEXT_CHUNKS", 5),
+        answer_max_sources=_coerce_int("ANSWER_MAX_SOURCES", 5),
+        answer_excerpt_chars=_coerce_int("ANSWER_EXCERPT_CHARS", 320),
     )

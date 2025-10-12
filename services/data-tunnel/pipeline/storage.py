@@ -1,5 +1,6 @@
-from datetime import datetime
-from pathlib import Path
+import json
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, Tuple
 
 import boto3
 from botocore.exceptions import ClientError
@@ -15,16 +16,64 @@ _s3_client = boto3.client(
 )
 
 
-def _landing_prefix(tenant_id: str, ingest_id: str) -> str:
-    now = datetime.utcnow()
-    return f"{tenant_id}/landing/{now:%Y/%m/%d}/{ingest_id}"
+def _object_prefix(tenant_id: str, ingest_id: str, variant: str) -> PurePosixPath:
+    safe_variant = variant.strip("/ ")
+    if not safe_variant:
+        safe_variant = "raw"
+    return PurePosixPath(tenant_id) / "landing" / ingest_id / safe_variant
 
 
-def put_landing(tenant_id: str, ingest_id: str, data: bytes, filename: str) -> str:
-    prefix = _landing_prefix(tenant_id, ingest_id)
-    key = str(Path(prefix) / filename)
-    _s3_client.put_object(Bucket=_settings.s3_bucket, Key=key, Body=data)
+def _normalize_filename(filename: str | None, fallback: str = "upload.bin") -> str:
+    name = (filename or "").strip()
+    if not name:
+        return fallback
+    normalized = Path(name).name
+    return normalized or fallback
+
+
+def _put_bytes(key: str, data: bytes, content_type: str | None = None) -> str:
+    extra_args = {}
+    if content_type:
+        extra_args["ContentType"] = content_type
+    _s3_client.put_object(Bucket=_settings.s3_bucket, Key=key, Body=data, **extra_args)
     return f"s3://{_settings.s3_bucket}/{key}"
+
+
+def put_raw_object(
+    tenant_id: str,
+    ingest_id: str,
+    data: bytes,
+    filename: str | None,
+) -> Tuple[str, str]:
+    name = _normalize_filename(filename)
+    key = str(_object_prefix(tenant_id, ingest_id, "raw") / name)
+    uri = _put_bytes(key, data)
+    return uri, key
+
+
+def put_redacted_text(
+    tenant_id: str,
+    ingest_id: str,
+    text: str,
+    filename: str | None,
+    *,
+    encoding: str = "utf-8",
+    content_type: str = "text/plain",
+) -> Tuple[str, str]:
+    base_name = Path(_normalize_filename(filename)).with_suffix(".txt").name
+    key = str(_object_prefix(tenant_id, ingest_id, "redacted") / base_name)
+    uri = _put_bytes(key, text.encode(encoding), content_type=content_type)
+    return uri, key
+
+
+def put_manifest(
+    tenant_id: str,
+    ingest_id: str,
+    payload: Dict[str, Any],
+) -> Tuple[str, str]:
+    key = str(_object_prefix(tenant_id, ingest_id, "metadata") / "manifest.json")
+    uri = _put_bytes(key, json.dumps(payload, ensure_ascii=False).encode("utf-8"), content_type="application/json")
+    return uri, key
 
 
 def get_object(path: str) -> bytes:

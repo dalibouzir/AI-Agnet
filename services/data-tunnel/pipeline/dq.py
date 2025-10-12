@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterable, Tuple
 
 try:
     import yaml
@@ -28,26 +28,42 @@ def _load_checks(config_path: Path) -> Dict[str, Any]:
     return checks
 
 
-def run_checks(ingest_id: str, tenant_id: str, payload: Dict[str, Any], config_path: Path) -> Tuple[bool, Dict[str, Any]]:
+def run_checks(
+    ingest_id: str,
+    tenant_id: str,
+    payload: Dict[str, Any],
+    config_path: Path,
+    skip: Iterable[str] | None = None,
+) -> Tuple[bool, Dict[str, Any]]:
     config = _load_checks(config_path).get("checks", {})
-    report: Dict[str, Any] = {"checks": {}, "timestamp": datetime.utcnow().isoformat()}
+    skip_set = {item.strip() for item in (skip or []) if item}
+    report: Dict[str, Any] = {
+        "checks": {},
+        "skipped": sorted(skip_set),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
     passed = True
 
+    def _mark(check: str, condition: bool) -> bool:
+        if check in skip_set:
+            report["checks"][check] = True
+            return True
+        report["checks"][check] = condition
+        return condition
+
     if config.get("not_empty"):
-        is_empty = not payload.get("text")
-        report["checks"]["not_empty"] = not is_empty
-        passed &= not is_empty
+        condition = bool(payload.get("text"))
+        passed &= _mark("not_empty", condition)
 
     if config.get("language_detect"):
-        report["checks"]["language_detect"] = payload.get("lang") in ("en", "auto")
-        passed &= report["checks"]["language_detect"]
+        lang_ok = payload.get("lang") in ("en", "auto")
+        passed &= _mark("language_detect", lang_ok)
 
     if config.get("ocr_conf_min") is not None:
         conf = payload.get("ocr_confidence", 1.0)
         threshold = float(config.get("ocr_conf_min", 0))
-        ok = conf >= threshold
-        report["checks"]["ocr_conf_min"] = ok
-        passed &= ok
+        conf_ok = conf >= threshold
+        passed &= _mark("ocr_conf_min", conf_ok)
 
     # The remaining checks are stubs that always pass until implemented.
     for key in ("table_schema_sanity", "date_unit_sanity"):

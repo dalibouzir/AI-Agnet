@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
+import json
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from celery_app import celery
 from pipeline import enrich as enrich_module
@@ -24,7 +26,7 @@ from pipeline.lineage import (
 from pipeline.models import EventType, Manifest
 from pipeline.pii import apply_pii
 from data_tunnel.ingest import ingest_manifest
-from pipeline.storage import get_object
+from pipeline.storage import get_object, put_redacted_text
 from settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -40,14 +42,16 @@ def _get_manifest(ingest_id: str) -> Optional[Manifest]:
     manifest_data = dict(row)
     if manifest_data.get("labels") is None:
         manifest_data["labels"] = []
+    if manifest_data.get("metadata") is None:
+        manifest_data["metadata"] = {}
     return Manifest(**manifest_data)
 
 
 def _record_chunks(tenant_id: str, doc_id: str, chunk_payloads: List[Dict[str, Any]]):
     with get_session() as session:
         for payload in chunk_payloads:
-            session.execute(
-                chunks_table.insert()
+            stmt = (
+                pg_insert(chunks_table)
                 .values(
                     chunk_id=payload["chunk_id"],
                     doc_id=doc_id,
@@ -61,8 +65,9 @@ def _record_chunks(tenant_id: str, doc_id: str, chunk_payloads: List[Dict[str, A
                     is_table=int(payload.get("is_table", False)),
                     table_ref=payload.get("table_ref"),
                 )
-                .on_conflict_do_nothing()
+                .on_conflict_do_nothing(index_elements=[chunks_table.c.chunk_id])
             )
+            session.execute(stmt)
 
 
 def _publish(event: EventType, ingest_id: str, tenant_id: str, payload: dict):
@@ -95,6 +100,11 @@ def parse_normalize(ingest_id: str) -> Dict[str, Any]:
         except Exception as exc:
             logger.warning("Landing object fetch failed: %s", exc)
     canonical = ingest_manifest(manifest, content)
+    options_payload = canonical.get("options") if isinstance(canonical.get("options"), dict) else {}
+    try:
+        logger.info("[%s] Effective options: %s", ingest_id, json.dumps(options_payload))
+    except TypeError:
+        logger.info("[%s] Effective options: %r", ingest_id, options_payload)
 
     mark_stage_complete(ingest_id, tenant_id, stage)
     celery.signature("workers.tasks.pii_dq", args=(ingest_id, canonical)).delay()
@@ -112,24 +122,108 @@ def pii_dq(ingest_id: str, canonical: Dict[str, Any] | None = None) -> Dict[str,
 
     canonical = canonical or {"text": ""}
 
-    redacted, pii_report = apply_pii(canonical.get("text", ""), _settings.pii_config)
+    options_payload = canonical.get("options") if isinstance(canonical.get("options"), dict) else {}
+    dq_section = options_payload.get("dq") if isinstance(options_payload.get("dq"), dict) else {}
+    ingest_section = options_payload.get("ingest") if isinstance(options_payload.get("ingest"), dict) else {}
+
+    skip_candidate = dq_section.get("skip") if isinstance(dq_section, dict) else None
+    skip_checks: List[str] = []
+    if isinstance(skip_candidate, (list, tuple)):
+        skip_checks = [str(item) for item in skip_candidate if item]
+
+    pii_config = dq_section.get("pii") if isinstance(dq_section.get("pii"), dict) else {}
+    pii_action = str(pii_config.get("action", "redact")).lower() or "redact"
+    pii_mask = str(pii_config.get("mask", "[REDACTED]") or "[REDACTED]")
+    pii_policy = str(pii_config.get("policy", "presidio") or "presidio")
+
+    fail_on_pii = bool(ingest_section.get("fail_on_pii", False))
+    continue_on_warn = bool(ingest_section.get("continue_on_warn", True))
+
+    original_text = canonical.get("text", "")
+    processed_text, pii_report = apply_pii(
+        original_text,
+        _settings.pii_config,
+        default_action=pii_action.upper(),
+        mask=pii_mask,
+    )
+
+    metadata = canonical.get("metadata") or {}
+    metadata.setdefault("pii", {})
+
+    pii_total = int(pii_report.get("_total", 0)) if isinstance(pii_report, dict) else 0
+    pii_found = pii_total > 0
+
+    metadata["pii"].update(
+        {
+            "found": pii_found,
+            "action": pii_action,
+            "mask": pii_mask,
+            "policy": pii_policy,
+            "total": pii_total,
+            "report": {k: v for k, v in (pii_report.items() if isinstance(pii_report, dict) else []) if not k.startswith("_")},
+            "raw_path": manifest.path,
+        }
+    )
+
+    if pii_found and (pii_action in {"redact", "hash"}):
+        canonical["text"] = processed_text
+        file_name = metadata.get("filename") or metadata.get("original_basename") or "document.txt"
+        redacted_uri, redacted_key = put_redacted_text(tenant_id, ingest_id, processed_text, file_name)
+        metadata["pii"]["redacted_path"] = redacted_uri
+        metadata["pii"]["redacted_key"] = redacted_key
+    else:
+        canonical["text"] = original_text if not pii_found else processed_text
+
+    if pii_found and (pii_action in {"fail", "reject"} or fail_on_pii):
+        if not stage_completed(ingest_id, stage):
+            transition_failed(ingest_id, tenant_id, stage, "PII policy violation")
+            _publish(
+                EventType.INGESTION_FAILED,
+                ingest_id,
+                tenant_id,
+                {"stage": stage, "pii_report": pii_report, "pii_action": pii_action},
+            )
+        return canonical
+
     dq_passed, dq_report = run_checks(
         ingest_id,
         tenant_id,
         {
-            "text": redacted,
+            "text": canonical.get("text", ""),
             "lang": canonical.get("lang"),
             "ocr_confidence": canonical.get("ocr_confidence", 1.0),
         },
         _settings.dq_config,
+        skip=skip_checks,
     )
 
     if not dq_passed and not stage_completed(ingest_id, stage):
-        transition_failed(ingest_id, tenant_id, stage, "DQ checks failed")
-        _publish(EventType.INGESTION_FAILED, ingest_id, tenant_id, {"stage": stage, "dq_report": dq_report})
-        return canonical
+        if continue_on_warn:
+            metadata.setdefault("dq", {})
+            metadata["dq"]["status"] = "WARN"
+            metadata["dq"]["report"] = dq_report
+        else:
+            transition_failed(ingest_id, tenant_id, stage, "DQ checks failed")
+            _publish(EventType.INGESTION_FAILED, ingest_id, tenant_id, {"stage": stage, "dq_report": dq_report})
+            return canonical
 
-    canonical.update({"text": redacted, "pii_report": pii_report, "dq_report": dq_report})
+    canonical.update({"pii_report": pii_report, "dq_report": dq_report, "metadata": metadata})
+
+    try:
+        with get_session() as session:
+            existing_meta = session.execute(
+                select(manifests.c.metadata).where(manifests.c.ingest_id == ingest_id)
+            ).scalar_one_or_none()
+            base_meta = existing_meta if isinstance(existing_meta, dict) else {}
+            merged_meta = base_meta.copy()
+            merged_meta.update(metadata)
+            session.execute(
+                update(manifests)
+                .where(manifests.c.ingest_id == ingest_id)
+                .values(metadata=merged_meta)
+            )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Failed updating manifest metadata for %s: %s", ingest_id, exc)
     mark_stage_complete(ingest_id, tenant_id, stage)
     celery.signature("workers.tasks.enrich_stage", args=(ingest_id, canonical)).delay()
     return canonical
@@ -166,16 +260,24 @@ def chunk_embed(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
         strategy.update({k: override[k] for k in override if k in {"max_tokens", "overlap_tokens"}})
     chunk_texts = semantic_chunks(canonical.get("text", ""), strategy)
     chunk_payloads: List[Dict[str, Any]] = []
+    chunk_metadata_source = canonical.get("metadata", {}) or {}
     common_meta = {
         "owner": canonical.get("owner"),
         "doc_type": canonical.get("doc_type"),
         "ingested_at": canonical.get("ingested_at"),
-        "metadata": canonical.get("metadata", {}),
     }
-    for text in chunk_texts:
+    pages = canonical.get("pages")
+    for idx, text in enumerate(chunk_texts):
+        chunk_metadata = dict(chunk_metadata_source)
+        chunk_object = chunk_metadata.get("object")
+        if isinstance(pages, list) and idx < len(pages):
+            chunk_metadata.setdefault("page", idx)
+        chunk_hash = hashlib.sha1(
+            f"{canonical.get('doc_id', ingest_id)}::{idx}::{text}".encode("utf-8", errors="ignore")
+        ).hexdigest()
         chunk_payloads.append(
             {
-                "chunk_id": str(uuid.uuid4()),
+                "chunk_id": chunk_hash,
                 "doc_id": canonical.get("doc_id", ingest_id),
                 "text": text,
                 "lang": canonical.get("lang"),
@@ -184,6 +286,9 @@ def chunk_embed(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
                 "page_end": None,
                 "is_table": False,
                 "tenant_id": tenant_id,
+                "chunk_index": idx,
+                "metadata": chunk_metadata,
+                "object": chunk_object,
                 **common_meta,
             }
         )
@@ -213,7 +318,7 @@ def index_publish(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
     embeddings = canonical.get("embeddings", [])
     try:
         upsert_vectors(chunks, embeddings, tenant_id)
-        index_bm25(chunks, tenant_id)
+        index_bm25(chunks, embeddings, tenant_id)
     except Exception as exc:
         if not stage_completed(ingest_id, stage):
             transition_failed(ingest_id, tenant_id, stage, str(exc))

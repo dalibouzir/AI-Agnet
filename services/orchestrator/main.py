@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, List
 
 import httpx
@@ -33,8 +34,10 @@ class RagHit(BaseModel):
 
 
 class SourceInfo(BaseModel):
-    source: str
+    title: str
     score: float
+    path: str
+    preview: str
 
 
 class AskResponse(BaseModel):
@@ -67,6 +70,51 @@ def _summarize_hits(hits: List[RagHit]) -> str:
     if len(summary) > 600:
         summary = summary[:597].rstrip() + "..."
     return summary
+
+
+def _derive_title(hit: RagHit) -> str:
+    metadata = hit.metadata or {}
+    title = metadata.get("title") or metadata.get("filename")
+    if not title:
+        object_path = metadata.get("object")
+        if object_path:
+            title = Path(object_path).name
+    if not title:
+        title = Path(hit.source).name if "/" in hit.source else hit.source
+    return title or "Unnamed Source"
+
+
+def _derive_path(hit: RagHit) -> str:
+    metadata = hit.metadata or {}
+    return metadata.get("object") or metadata.get("raw_path") or hit.source
+
+
+def _excerpt(text: str, limit: int) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned if cleaned else "(no text in chunk)"
+    truncated = cleaned[: limit - 3]
+    if " " in truncated:
+        truncated = truncated.rsplit(" ", 1)[0]
+    return truncated + "..."
+
+
+def _format_structured_answer(query: str, hits: List[RagHit]) -> str:
+    if not hits:
+        return "Query: {query}\n\nKey Findings:\n- No relevant information found."
+
+    lines: List[str] = [f"Query: {query}", "", "Key Findings:"]
+    for idx, hit in enumerate(hits[: settings.answer_max_sources], start=1):
+        title = _derive_title(hit)
+        path = _derive_path(hit)
+        preview = _excerpt(hit.text, settings.answer_excerpt_chars)
+        lines.append(f"{idx}. {title} (score {hit.score:.2f})")
+        lines.append(f"   Path: {path}")
+        lines.append(f"   Excerpt: {preview}")
+    remaining = len(hits) - settings.answer_max_sources
+    if remaining > 0:
+        lines.append(f"... {remaining} additional matches available.")
+    return "\n".join(lines)
 
 
 def _build_prompt(query: str, hits: List[RagHit]) -> str:
@@ -154,8 +202,22 @@ async def ask(request: AskRequest) -> AskResponse:
             detail=f"Failed to parse RAG hits: {exc}",
         ) from exc
 
-    answer = await _generate_answer(request.query, hits)
-    sources = [SourceInfo(source=hit.source, score=hit.score) for hit in hits[: request.top_k]]
+    structured = _format_structured_answer(request.query, hits)
+    summary = await _generate_answer(request.query, hits)
+    answer = structured
+    if summary and summary.strip() and summary.strip().lower() not in {"no relevant information found.", "no relevant information found"}:
+        answer = f"{structured}\n\n---\nSummary:\n{summary}"
+
+    sources: List[SourceInfo] = []
+    for hit in hits[: settings.answer_max_sources]:
+        sources.append(
+            SourceInfo(
+                title=_derive_title(hit),
+                score=hit.score,
+                path=_derive_path(hit),
+                preview=_excerpt(hit.text, settings.answer_excerpt_chars),
+            )
+        )
 
     return AskResponse(answer=answer, sources=sources)
 

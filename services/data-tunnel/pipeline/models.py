@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,11 +17,16 @@ class Manifest(BaseModel):
     tenant_id: str
     source: str
     path: str
+    object_key: Optional[str] = None
+    object_suffix: Optional[str] = None
+    original_basename: Optional[str] = None
+    doc_type: Optional[str] = None
     checksum: str
     size: int
     mime: str
     uploader: Optional[str] = None
     labels: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

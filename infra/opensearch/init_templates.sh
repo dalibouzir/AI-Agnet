@@ -1,58 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OPENSEARCH_URL=${OPENSEARCH_URL:-http://localhost:9200}
-OPENSEARCH_USER=${OPENSEARCH_USER:-admin}
-OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-admin}
+OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
+INDEX_TEMPLATE_NAME="rag-template"
 
-read -r -d '' TEMPLATE_BODY <<'JSON'
-{
-  "index_patterns": ["rag-*"] ,
-  "template": {
-    "settings": {
-      "index": {
-        "number_of_shards": 1,
-        "number_of_replicas": 0,
-        "knn": true,
-        "knn.algo_param.ef_search": 512,
-        "refresh_interval": "1s"
-      }
-    },
-    "mappings": {
-      "properties": {
-        "chunk_id": {"type": "keyword"},
-        "doc_id": {"type": "keyword"},
-        "tenant_id": {"type": "keyword"},
-        "owner": {"type": "keyword"},
-        "doc_type": {"type": "keyword"},
-        "ingested_at": {"type": "date"},
-        "section": {"type": "keyword"},
-        "page_start": {"type": "integer"},
-        "page_end": {"type": "integer"},
-        "text": {"type": "text"},
-        "metadata": {"type": "flattened"},
-        "embedding": {
-          "type": "knn_vector",
-          "dimension": 1536,
-          "method": {
-            "name": "hnsw",
-            "engine": "faiss",
-            "space_type": "cosinesimil",
-            "parameters": {
-              "ef_construction": 512,
-              "m": 16
-            }
-          }
-        }
-      }
+curl -sS -X PUT "$OPENSEARCH_URL/_template/$INDEX_TEMPLATE_NAME" \
+  -H 'Content-Type: application/json' -d '{
+  "index_patterns": ["rag-chunks*"],
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "knn": true
+    }
+  },
+  "mappings": {
+    "dynamic": "true",
+    "properties": {
+      "text":        { "type": "text", "analyzer": "standard" },
+      "text_raw":    { "type": "keyword", "ignore_above": 32766 },
+      "metadata":    { "type": "object", "dynamic": true },
+      "embedding":   { "type": "knn_vector", "dimension": 1536, "method": {"name": "hnsw", "space_type": "cosinesimil"} }
     }
   }
-}
-JSON
-
-curl -sSf -u "$OPENSEARCH_USER:$OPENSEARCH_PASSWORD" \
-  -H 'Content-Type: application/json' \
-  -X PUT "$OPENSEARCH_URL/_index_template/rag-template" \
-  -d "$TEMPLATE_BODY"
-
-echo "rag-template index template applied"
+}'
+echo
+echo "Template $INDEX_TEMPLATE_NAME installed."

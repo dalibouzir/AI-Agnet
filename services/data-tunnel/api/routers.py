@@ -1,9 +1,11 @@
 import hashlib
+import json
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, HTTPException, Query, UploadFile, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import desc, select
@@ -11,7 +13,34 @@ from sqlalchemy import desc, select
 from pipeline.db import get_session, ingestions, manifests
 from pipeline.lineage import update_status
 from pipeline.models import IngestionStatus
-from pipeline.storage import put_landing
+from pipeline.storage import put_raw_object, put_manifest
+import logging
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_OPTIONS: Dict[str, Any] = {
+    "dq": {
+        "language_detect": True,
+        "pii": {"action": "redact", "policy": "presidio", "mask": "[REDACTED]"},
+    },
+    "ingest": {"continue_on_warn": True, "fail_on_pii": False},
+}
+
+
+def _merge_options(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    keys = set(base.keys()) | set(override.keys())
+    for key in keys:
+        if key in base and key in override:
+            if isinstance(base[key], dict) and isinstance(override[key], dict):
+                result[key] = _merge_options(base[key], override[key])
+            else:
+                result[key] = override[key]
+        elif key in override:
+            result[key] = override[key]
+        else:
+            result[key] = base[key]
+    return result
 from workers.tasks import parse_normalize
 
 router = APIRouter()
@@ -21,23 +50,132 @@ class ReindexRequest(BaseModel):
     ingest_id: str
     tenant_id: Optional[str] = None
 
-@router.post("/v1/ingest")
-async def ingest(
-    tenant_id: str = Form(...),
-    source: str = Form(...),
-    file: UploadFile = File(...),
-    labels: Optional[List[str]] = Form(None),
-    uploader: Optional[str] = Form(None),
-) -> JSONResponse:
-    data = await file.read()
+@router.post(
+    "/v1/ingest",
+    openapi_extra={
+        "requestBody": {
+            "content": {
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "tenant_id": {"type": "string"},
+                            "source": {"type": "string"},
+                            "doc_type": {"type": "string"},
+                            "object": {"type": "string"},
+                            "metadata": {"type": "string", "description": "JSON string"},
+                            "options": {"type": "string", "description": "JSON string"},
+                            "labels": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "uploader": {"type": "string"},
+                            "file": {
+                                "type": "string",
+                                "format": "binary",
+                            },
+                        },
+                        "required": ["tenant_id", "file"],
+                    }
+                }
+            }
+        }
+    },
+)
+async def ingest(request: Request) -> JSONResponse:
+    form = await request.form()
+    logger.debug("ingest form keys=%s", list(form.keys()))
+
+    file_field = form.get("file")
+    logger.debug("ingest file field type=%s", type(file_field))
+    if not hasattr(file_field, "file"):
+        raise HTTPException(status_code=400, detail="file field is required")
+    data = await file_field.read()
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
+    tenant_id = form.get("tenant_id")
+    if not tenant_id or not str(tenant_id).strip():
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+    tenant_id = str(tenant_id).strip()
+
+    source = str(form.get("source", "#console-upload") or "#console-upload").strip() or "#console-upload"
+    doc_type = str(form.get("doc_type", "binary") or "binary").strip() or "binary"
+    object_name = form.get("object")
+    uploader = form.get("uploader")
+    metadata_raw = form.get("metadata")
+    options_raw = form.get("options")
+
+    labels_values = []
+    if hasattr(form, "getlist"):
+        labels_values = [item for item in form.getlist("labels") if item]
+    if not labels_values:
+        single_label = form.get("labels")
+        if isinstance(single_label, str):
+            labels_values = [item.strip() for item in single_label.split(",") if item.strip()]
+
+    metadata_payload: dict[str, Any] = {}
+    if metadata_raw:
+        try:
+            parsed = json.loads(metadata_raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="metadata must be valid JSON") from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="metadata must be a JSON object")
+        metadata_payload = parsed
+    options_payload: dict[str, Any] | None = None
+    if options_raw:
+        try:
+            parsed_options = json.loads(options_raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="options must be valid JSON") from exc
+        if not isinstance(parsed_options, dict):
+            raise HTTPException(status_code=400, detail="options must be a JSON object")
+        options_payload = parsed_options
     ingest_id = str(uuid.uuid4())
     checksum = hashlib.sha256(data).hexdigest()
-    labels = labels or []
+    logger.debug("ingest labels raw=%r", labels_values)
+    labels = [label for label in labels_values if label]
+    if labels:
+        labels = list(dict.fromkeys(labels))
 
-    path = put_landing(tenant_id, ingest_id, data, file.filename or "upload.bin")
+    filename = file_field.filename or "upload.bin"
+    object_name_str = str(object_name).strip() if isinstance(object_name, str) else None
+    requested_object = (object_name_str or filename).strip() or filename
+    requested_doc_type = (doc_type or "").strip() or "binary"
+    s3_uri, object_storage_key = put_raw_object(
+        tenant_id, ingest_id, data, requested_object
+    )
+    original_basename = Path(requested_object).name or Path(filename).name
+    normalized_suffix = original_basename
+
+    resolved_options = _merge_options(DEFAULT_OPTIONS, options_payload or {})
+    metadata_payload["options"] = resolved_options
+    metadata_payload["raw_path"] = s3_uri
+    metadata_payload["raw_key"] = object_storage_key
+
+    manifest_doc = {
+        "ingest_id": ingest_id,
+        "tenant_id": tenant_id,
+        "source": source,
+        "doc_type": requested_doc_type,
+        "labels": labels,
+        "uploader": str(uploader).strip() if isinstance(uploader, str) and uploader.strip() else None,
+        "size": len(data),
+        "mime": getattr(file_field, "content_type", None) or "application/octet-stream",
+        "object": {
+            "original_name": filename,
+            "stored_name": requested_object,
+            "raw_uri": s3_uri,
+            "raw_key": object_storage_key,
+        },
+        "options": resolved_options,
+        "metadata": metadata_payload,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    manifest_uri, manifest_key = put_manifest(tenant_id, ingest_id, manifest_doc)
+    metadata_payload["manifest_path"] = manifest_uri
+    metadata_payload["manifest_key"] = manifest_key
 
     with get_session() as session:
         session.execute(
@@ -45,12 +183,17 @@ async def ingest(
                 ingest_id=ingest_id,
                 tenant_id=tenant_id,
                 source=source,
-                path=path,
+                path=s3_uri,
+                object_key=object_storage_key,
+                object_suffix=normalized_suffix,
+                original_basename=original_basename,
+                doc_type=requested_doc_type,
                 checksum=checksum,
                 size=len(data),
-                mime=file.content_type or "application/octet-stream",
-                uploader=uploader,
+                mime=getattr(file_field, "content_type", None) or "application/octet-stream",
+                uploader=str(uploader).strip() if isinstance(uploader, str) and uploader.strip() else None,
                 labels=labels,
+                metadata=metadata_payload,
                 created_at=datetime.utcnow(),
             )
         )
@@ -94,6 +237,11 @@ async def list_ingestions(
             manifests.c.labels,
             manifests.c.size,
             manifests.c.mime,
+            manifests.c.object_key,
+            manifests.c.object_suffix,
+            manifests.c.original_basename,
+            manifests.c.doc_type,
+            manifests.c.metadata,
             manifests.c.created_at,
             ingestions.c.status,
             ingestions.c.stage,
@@ -122,6 +270,11 @@ async def list_ingestions(
             "labels": row.labels or [],
             "size": row.size,
             "mime": row.mime,
+            "object_key": row.object_key,
+            "object_suffix": row.object_suffix,
+            "original_basename": row.original_basename,
+            "doc_type": row.doc_type,
+            "metadata": row.metadata or {},
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "status": row.status.value if row.status else None,
             "stage": row.stage,

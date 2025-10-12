@@ -33,11 +33,16 @@ manifests = Table(
     Column("tenant_id", String, nullable=False, index=True),
     Column("source", String, nullable=False),
     Column("path", String, nullable=False),
+    Column("object_key", String, nullable=False),
+    Column("object_suffix", String, nullable=False),
+    Column("original_basename", String, nullable=False),
+    Column("doc_type", String, nullable=False),
     Column("checksum", String, nullable=False),
     Column("size", Integer, nullable=False),
     Column("mime", String, nullable=False),
     Column("uploader", String),
-    Column("labels", JSONB, server_default="[]"),
+    Column("labels", JSONB, server_default=text("'[]'::jsonb")),
+    Column("metadata", JSONB, server_default=text("'{}'::jsonb")),
     Column("created_at", DateTime, nullable=False),
 )
 
@@ -127,6 +132,11 @@ pii_reports = Table(
 def init_db() -> None:
     with _engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_key TEXT"))
+        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_suffix TEXT"))
+        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS original_basename TEXT"))
+        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS doc_type TEXT"))
+        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb"))
     _metadata.create_all(_engine)
 
 

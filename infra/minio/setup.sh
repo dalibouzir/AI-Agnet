@@ -1,37 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ALIAS_NAME=${MINIO_ALIAS:-local}
-MINIO_ENDPOINT=${MINIO_ENDPOINT:-http://localhost:9000}
-MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minio}
-MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minio123}
-MINIO_BUCKET=${MINIO_BUCKET:-documents}
-WEBHOOK_NAME=${MINIO_WEBHOOK_NAME:-data-tunnel}
-WEBHOOK_URL=${MINIO_WEBHOOK_URL:-http://data-tunnel:8000/webhook/minio}
-WEBHOOK_PREFIX=${MINIO_WEBHOOK_PREFIX:-tenant-}
-QUEUE_DIR=${MINIO_WEBHOOK_QUEUE_DIR:-/tmp/minio-webhook}
+# Defaults (override via env or .env)
+MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://minio:9000}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-minio}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minio123}"
+BUCKET="${MINIO_BUCKET:-documents}"
+WEBHOOK_URL="${DATA_TUNNEL_WEBHOOK:-http://data-tunnel:8000/webhook/minio}"
 
-if ! command -v mc >/dev/null 2>&1; then
-  echo "minio client (mc) is required but not found on PATH" >&2
-  exit 1
-fi
+# Configure mc host and bucket
+docker run --rm --network infra_default \
+  -e MC_HOST_local="${MINIO_ENDPOINT#http://};${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}" \
+  minio/mc mb --ignore-existing local/"$BUCKET"
 
-mc alias set "$ALIAS_NAME" "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
-mc mb --ignore-existing "$ALIAS_NAME/$MINIO_BUCKET" >/dev/null
+# Remove any previous events, then add object-created notifications to the webhook
+docker run --rm --network infra_default \
+  -e MC_HOST_local="${MINIO_ENDPOINT#http://};${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}" \
+  minio/mc event remove local/"$BUCKET" --event put --prefix '' || true
 
-mc admin config set "$ALIAS_NAME" \
-  notify_webhook:"$WEBHOOK_NAME" \
-  endpoint="${WEBHOOK_URL}" \
-  queue_dir="${QUEUE_DIR}" \
-  queue_limit="0" >/dev/null
+docker run --rm --network infra_default \
+  -e MC_HOST_local="${MINIO_ENDPOINT#http://};${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}" \
+  minio/mc event add local/"$BUCKET" arn:minio:sqs::WEBHOOK:webhook --event put --suffix '' --prefix ''
 
-mc admin service restart "$ALIAS_NAME" >/dev/null
-
-mc event add "$ALIAS_NAME/$MINIO_BUCKET" \
-  arn:minio:sqs:::"$WEBHOOK_NAME" \
-  --event put \
-  --event post \
-  --event copy \
-  --prefix "$WEBHOOK_PREFIX" >/dev/null
-
-echo "MinIO webhook '$WEBHOOK_NAME' configured for bucket '$MINIO_BUCKET'"
+# Verify
+docker run --rm --network infra_default \
+  -e MC_HOST_local="${MINIO_ENDPOINT#http://};${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}" \
+  minio/mc event list local/"$BUCKET"

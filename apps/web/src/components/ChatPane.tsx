@@ -4,7 +4,7 @@ import { FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } fr
 type MessageRole = "user" | "assistant";
 type MessageVariant = "tip" | "error" | "answer";
 
-export type SourceInfo = { source: string; score: number };
+export type SourceInfo = { title: string; score: number; path: string; preview: string };
 
 type Message = {
   id: string;
@@ -104,10 +104,21 @@ export default function ChatPane({ onSourcesUpdate, onStatusChange }: ChatPanePr
 
         if (Array.isArray(data?.sources)) {
           const sources: SourceInfo[] = data.sources
-            .filter((item: unknown): item is SourceInfo =>
-              typeof item === "object" && item !== null && typeof (item as SourceInfo).source === "string" && typeof (item as SourceInfo).score === "number",
+            .filter(
+              (item: unknown): item is SourceInfo =>
+                typeof item === "object" &&
+                item !== null &&
+                typeof (item as SourceInfo).title === "string" &&
+                typeof (item as SourceInfo).path === "string" &&
+                typeof (item as SourceInfo).preview === "string" &&
+                typeof (item as SourceInfo).score === "number",
             )
-            .map((item) => ({ source: item.source, score: item.score }));
+            .map((item) => ({
+              title: item.title,
+              score: item.score,
+              path: item.path,
+              preview: item.preview,
+            }));
           onSourcesUpdate?.(sources);
         } else {
           resetSources();
@@ -210,13 +221,13 @@ export default function ChatPane({ onSourcesUpdate, onStatusChange }: ChatPanePr
 
 function getBubbleClass(role: MessageRole, variant?: MessageVariant) {
   if (role === "user") {
-    return "max-w-xl rounded-xl bg-[var(--accent)]/20 px-4 py-3 text-sm text-[var(--accent)] shadow-surface backdrop-blur-0";
+    return "max-w-xl whitespace-pre-line rounded-xl bg-[var(--accent)]/20 px-4 py-3 text-sm text-[var(--accent)] shadow-surface backdrop-blur-0";
   }
   if (variant === "tip") {
-    return "max-w-xl rounded-xl border border-[var(--accent)] bg-[var(--panel)] px-4 py-3 text-sm text-[var(--text)] shadow-surface";
+    return "max-w-xl whitespace-pre-line rounded-xl border border-[var(--accent)] bg-[var(--panel)] px-4 py-3 text-sm text-[var(--text)] shadow-surface";
   }
   if (variant === "error") {
-    return "max-w-xl rounded-xl border border-[var(--danger)] bg-[var(--panel-2)] px-4 py-3 text-sm text-[var(--danger)] shadow-surface";
+    return "max-w-xl whitespace-pre-line rounded-xl border border-[var(--danger)] bg-[var(--panel-2)] px-4 py-3 text-sm text-[var(--danger)] shadow-surface";
   }
-  return "max-w-xl rounded-xl bg-[var(--panel)] px-4 py-3 text-sm text-[var(--text)] shadow-surface";
+  return "max-w-xl whitespace-pre-line rounded-xl bg-[var(--panel)] px-4 py-3 text-sm text-[var(--text)] shadow-surface";
 }

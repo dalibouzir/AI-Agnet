@@ -43,3 +43,8 @@ def generate_embeddings(texts: Iterable[str]) -> List[List[float]]:
             vector = [random.random() for _ in range(dims)]
         embeddings.append(vector)
     return embeddings
+
+
+def embedding_dimension() -> int:
+    config = _load_config(_settings.embed_config)
+    return int(config.get("dims", 1536))

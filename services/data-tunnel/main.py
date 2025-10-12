@@ -5,6 +5,7 @@ from api.routers import router as api_router
 from data_tunnel.webhooks import router as webhook_router
 from pipeline.db import init_db
 from pipeline.storage import ensure_bucket
+from pipeline.index import ensure_index_template
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -17,6 +18,7 @@ app.include_router(webhook_router)
 def startup_event() -> None:
     init_db()
     ensure_bucket()
+    ensure_index_template()
 
 
 @app.get("/health")

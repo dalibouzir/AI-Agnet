@@ -1,0 +1,9 @@
+services:
+  data-tunnel:
+    build:
+      context: ../services/data-tunnel
+      dockerfile: Dockerfile
+  data-tunnel-worker:
+    build:
+      context: ../services/data-tunnel
+      dockerfile: Dockerfile
