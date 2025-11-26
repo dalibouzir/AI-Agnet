@@ -141,11 +141,21 @@ def _extract_txt(data: bytes) -> TextExtractionResult:
 
 
 def _extract_csv(data: bytes) -> TextExtractionResult:
-    handle = io.StringIO(data.decode("utf-8", errors="ignore"))
+    decoded = data.decode("utf-8", errors="ignore")
+    handle = io.StringIO(decoded, newline="")
     reader = csv.reader(handle)
-    rows = [", ".join(cell.strip() for cell in row if cell.strip()) for row in reader]
+    rows: List[str] = []
+    try:
+        for row in reader:
+            cleaned = [cell.strip() for cell in row if isinstance(cell, str) and cell.strip()]
+            if cleaned:
+                rows.append(", ".join(cleaned))
+    except csv.Error as exc:
+        logger.warning("CSV parse failed (%s); falling back to raw line split", exc)
+        rows = [line.strip() for line in decoded.splitlines() if line.strip()]
     text = "\n".join(rows)
-    return TextExtractionResult(text=text, doc_type="csv", pages=rows, tables=[text])
+    tables = [text] if text else []
+    return TextExtractionResult(text=text, doc_type="csv", pages=rows, tables=tables)
 
 
 def _extract_pptx(data: bytes) -> TextExtractionResult:

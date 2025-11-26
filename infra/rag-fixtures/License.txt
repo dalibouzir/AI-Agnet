@@ -1,0 +1,7 @@
+AI Business Agent – Limited License
+----------------------------------
+1. **Internal Use Only:** The corpus (README.txt, Sentences files, spreadsheets, and CV) may be used exclusively inside the tenant-demo workspace for diligence and planning workflows.
+2. **No Public Redistribution:** You may summarize insights externally, but redistributing the raw files requires written approval from Mohamed Ali and the data stewards.
+3. **Attribution Required:** Any derivative analysis must cite “AI Business Agent knowledge base – License.txt (tenant-demo).”
+4. **Security Controls:** Documents must stay inside MinIO/OpenSearch with access governed by `TENANT_NAMESPACE=tenant-demo`; copying data to unmanaged devices is prohibited.
+5. **Revocation Clause:** Violating these conditions allows the authors to revoke access and purge embeddings from OpenSearch.

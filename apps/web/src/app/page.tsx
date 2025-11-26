@@ -125,24 +125,24 @@ export default function Home() {
           className="grid gap-12 md:grid-cols-[minmax(0,1fr)_360px] md:items-center"
         >
           <div className="space-y-6">
-            <p className="text-[11px] uppercase tracking-[0.32em] text-muted">Neural operations platform</p>
+            <p className="text-[11px] uppercase tracking-[0.32em] text-muted">Neural operations for business teams</p>
             <h1 className="font-display text-4xl font-extrabold tracking-tight text-[var(--text)] md:text-5xl">
-              Build neural-grade business agents—fast, verifiable, governed.
+              AI Business Agent – your private analyst for company data.
             </h1>
-            <p className="max-w-xl text-base text-muted">
-              Ingest your data, enforce policy, and ship agents that cite sources, run simulations, and respect enterprise controls.
+            <p className="max-w-2xl text-base text-muted">
+              Connect sources, run governed RAG and simulations, and ship cited answers your ops and finance teams can trust.
             </p>
             <div className="flex flex-wrap items-center gap-3">
-              <ButtonLink href="/chat" tone="primary">
-                Open Chat Console
+              <ButtonLink href="/chat" tone="primary" className="px-5">
+                Open live console
               </ButtonLink>
-              <ButtonLink href="/upload" tone="secondary">
-                Upload Knowledge Base
+              <ButtonLink href="/upload" tone="secondary" className="px-5">
+                Upload knowledge base
               </ButtonLink>
               <LinkCTA />
             </div>
-            <p className="text-xs uppercase tracking-[0.35em] text-muted">
-              PII-safe ingestion • Policy-aware routing • Reproducible runs
+            <p className="text-xs text-muted">
+              FastAPI • Next.js 14 • Docker Compose • Prometheus • OpenSearch
             </p>
           </div>
           <DataStream reduceMotion={reduceMotion} />
@@ -287,3 +287,4 @@ function FooterColumn({ title, items }: { title: string; items: string[] }) {
     </div>
   );
 }
+

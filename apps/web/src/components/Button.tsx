@@ -12,13 +12,13 @@ type BaseProps = {
 const cx = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ');
 
 const baseStyles =
-  'relative inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-fast ease-out';
+  'relative inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-all duration-200 ease-out';
 
 const toneStyles: Record<ButtonTone, string> = {
   primary:
-    'bg-[var(--accent)] text-[#0A0E16] shadow-panel hover:-translate-y-px hover:shadow-[0_0_20px_rgba(0,229,255,0.45)] focus-visible:[box-shadow:var(--focus)]',
+    'bg-[color:var(--color-primary)] text-[color:var(--text-on-accent)] shadow-[var(--shadow-soft)] hover:-translate-y-px hover:shadow-[var(--shadow-accent)] focus-visible:[box-shadow:var(--focus-ring)]',
   secondary:
-    'border border-[var(--border)] bg-[var(--panel)] text-[var(--text)] hover:-translate-y-px hover:border-[var(--accent)] focus-visible:[box-shadow:var(--focus)]',
+    'border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] text-[color:var(--text-primary)] hover:-translate-y-px hover:border-[color:var(--color-primary)] focus-visible:[box-shadow:var(--focus-ring)]',
 };
 
 export const Button = forwardRef<HTMLButtonElement, ComponentPropsWithRef<'button'> & BaseProps>(

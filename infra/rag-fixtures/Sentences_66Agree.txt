@@ -1,0 +1,7 @@
+Sentences With ~Two-Thirds Agreement
+-----------------------------------
+1. **66%** of CS leaders say onboarding debt is the number-one reason net revenue retention wobbles two quarters after a big ARR surge.
+2. **67%** of GTM directors agree we should pause low-intent paid channels until sales capacity catches up with the enterprise pipeline.
+3. **65%** of finance partners report that exec dashboards still bury cash conversion trends behind vanity KPIs.
+4. **66%** of product managers say buyers now expect AI copilots baked into every workflow, so launch readiness needs a trust charter.
+5. **68%** of RevOps analysts agree that sharing draft board materials through the RAG workspace prevents version drift before QBRs.

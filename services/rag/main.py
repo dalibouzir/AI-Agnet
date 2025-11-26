@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from settings import get_settings
+from retriever import HybridRetriever
 
 settings = get_settings()
 
@@ -28,6 +29,8 @@ app = FastAPI(title=settings.app_name)
 Instrumentator().instrument(app).expose(app)
 
 logger = logging.getLogger(__name__)
+
+hybrid_retriever = HybridRetriever(settings)
 
 
 @dataclass(slots=True)
@@ -81,12 +84,66 @@ class SearchHit(BaseModel):
     score: float
     text: str
     source: str
+    chunk_id: str
+    doc_id: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
 class SearchResponse(BaseModel):
     query_vector_dim: int
     hits: List[SearchHit] = Field(default_factory=list)
+
+
+class RetrieveRequest(BaseModel):
+    query: str
+    top_k: int = Field(default=5, gt=0)
+    index: Optional[str] = None
+
+
+class RetrieveChunk(BaseModel):
+    doc_id: str
+    chunk_id: str
+    text: str
+    score: Optional[float] = None
+    source: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class RetrieveDocument(BaseModel):
+    doc_id: str
+    file: Optional[str] = None
+    path: Optional[str] = None
+    score: Optional[float] = None
+
+
+class RetrieveResponse(BaseModel):
+    query: str
+    top_k: int
+    chunks: List[RetrieveChunk] = Field(default_factory=list)
+    usage: Dict[str, Any] = Field(default_factory=dict)
+    documents: List[RetrieveDocument] = Field(default_factory=list)
+
+
+def _describe_file(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not metadata:
+        return None
+    for key in ("filename", "original_basename", "title", "doc_title"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _describe_path(metadata: Optional[Dict[str, Any]], fallback: Optional[str]) -> Optional[str]:
+    candidates: List[str] = []
+    if metadata:
+        for key in ("path", "raw_path", "object", "object_key"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+    if fallback and fallback.strip():
+        candidates.append(fallback.strip())
+    return candidates[0] if candidates else None
 
 
 def _http_status_from_exc(exc: httpx.HTTPError) -> int:
@@ -322,6 +379,7 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     chunk_records: List[ChunkRecord] = []
     processed_documents = 0
     skipped_documents = 0
+    expected_source = hybrid_retriever.index_sources.get(index_name)
 
     for object_name in request.objects:
         try:
@@ -352,6 +410,8 @@ async def ingest(request: IngestRequest) -> IngestResponse:
         for idx, chunk in enumerate(chunks):
             chunk_metadata = dict(base_metadata)
             chunk_metadata["chunk_index"] = idx
+            if expected_source:
+                chunk_metadata.setdefault("source", expected_source)
             chunk_records.append(
                 ChunkRecord(
                     text=chunk,
@@ -404,60 +464,87 @@ async def ingest(request: IngestRequest) -> IngestResponse:
     return IngestResponse(ingested=len(documents), index=index_name)
 
 
-async def _search_chunks(index_name: str, embedding: List[float], top_k: int) -> List[SearchHit]:
-    index_url = f"{settings.opensearch_url.rstrip('/')}/{index_name}/_search"
-    query: Dict[str, Any] = {
-        "size": top_k,
-        "query": {
-            "knn": {
-                "embedding": {
-                    "vector": embedding,
-                    "k": top_k,
-                }
-            }
-        },
-    }
-
-    async with httpx.AsyncClient(timeout=settings.request_timeout_s) as client:
-        try:
-            response = await client.post(index_url, json=query)
-            if response.status_code == status.HTTP_404_NOT_FOUND:
-                return []
-            response.raise_for_status()
-        except httpx.HTTPError as exc:  # pragma: no cover - depends on backend
-            raise HTTPException(
-                status_code=_http_status_from_exc(exc),
-                detail=f"OpenSearch query failed: {exc}",
-            ) from exc
-
-    payload = response.json()
-    hits_payload = payload.get("hits", {}).get("hits", [])
-
-    hits: List[SearchHit] = []
-    for item in hits_payload:
-        source = item.get("_source", {})
-        metadata = source.get("metadata")
-        if metadata is not None and not isinstance(metadata, dict):
-            metadata = None
-        hits.append(
-            SearchHit(
-                score=float(item.get("_score", 0.0)),
-                text=str(source.get("text", "")),
-                source=str(source.get("source", "")),
-                metadata=metadata,
-            )
-        )
-
-    return hits
-
-
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest) -> SearchResponse:
-    index_name = request.index or settings.rag_index
-    embeddings = await _embed_texts([request.query])
-    embedding = embeddings[0]
-    hits = await _search_chunks(index_name, embedding, request.top_k)
+    index_name = request.index or settings.index_sp500
+    documents = await hybrid_retriever.retrieve(request.query, index_name, top_k=request.top_k)
+    hits: List[SearchHit] = []
+    for doc in documents:
+        score = doc.rerank_score or doc.combined_score
+        hits.append(
+            SearchHit(
+                score=score,
+                text=doc.text,
+                source=doc.source,
+                chunk_id=doc.chunk_id,
+                doc_id=doc.doc_id,
+                metadata=doc.metadata,
+            )
+        )
     return SearchResponse(query_vector_dim=settings.embedding_dimension, hits=hits)
+
+
+@app.post("/v1/retrieve", response_model=RetrieveResponse)
+async def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+    index_name = request.index or settings.index_sp500
+    documents = await hybrid_retriever.retrieve(request.query, index_name, top_k=request.top_k)
+
+    chunks: List[RetrieveChunk] = []
+    document_summaries: Dict[str, RetrieveDocument] = {}
+    for doc in documents:
+        score = doc.rerank_score or doc.combined_score
+        chunk = RetrieveChunk(
+            doc_id=doc.doc_id or doc.source,
+            chunk_id=doc.chunk_id,
+            text=doc.text,
+            score=score,
+            source=doc.source,
+            metadata=doc.metadata,
+        )
+        chunks.append(chunk)
+
+        summary_key = chunk.doc_id or chunk.chunk_id
+        file_label = _describe_file(doc.metadata) or summary_key
+        path_label = _describe_path(doc.metadata, chunk.source)
+        if summary_key not in document_summaries:
+            document_summaries[summary_key] = RetrieveDocument(
+                doc_id=summary_key,
+                file=file_label,
+                path=path_label,
+                score=score,
+            )
+
+    usage = {
+        "vector_dim": settings.embedding_dimension,
+        "retrieved": len(chunks),
+        "index": index_name,
+        "strategy": "hybrid_bm25_vector_rerank",
+        "reranker": getattr(settings, "reranker_model", None),
+    }
+
+    try:
+        logger.info(
+            "RETRIEVE_TRACE\t%s",
+            json.dumps(
+                {
+                    "query": request.query,
+                    "index": index_name,
+                    "retrieved": len(chunks),
+                    "documents": [summary.model_dump() for summary in document_summaries.values()],
+                    "expected_source": hybrid_retriever.index_sources.get(index_name),
+                }
+            ),
+        )
+    except Exception:  # pragma: no cover - defensive logging
+        logger.debug("Failed to log retrieve trace", exc_info=True)
+
+    return RetrieveResponse(
+        query=request.query,
+        top_k=request.top_k,
+        chunks=chunks,
+        usage=usage,
+        documents=list(document_summaries.values()),
+    )
 
 
 @app.get("/health")

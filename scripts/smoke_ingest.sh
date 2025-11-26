@@ -13,11 +13,12 @@ if [[ ! -f "$FILE_PATH" ]]; then
 fi
 
 TENANT="${TENANT_ID:-tenant-demo}"
-API_URL="${DATA_TUNNEL_URL:-http://localhost:8006}"
+API_URL="${INGEST_BASE_URL:-${DATA_TUNNEL_URL:-http://localhost:8006}}"
 FILENAME="$(basename "$FILE_PATH")"
 
 echo "Uploading $FILENAME for tenant $TENANT..."
 INGEST_JSON="$(curl -sS -X POST "$API_URL/v1/ingest" \
+  -F tenantId="$TENANT" \
   -F tenant_id="$TENANT" \
   -F source=upload \
   -F doc_type=auto \
@@ -25,7 +26,16 @@ INGEST_JSON="$(curl -sS -X POST "$API_URL/v1/ingest" \
   -F file=@"$FILE_PATH" \
   )"
 
-INGEST_ID="$(echo "$INGEST_JSON" | jq -r '.ingest_id // empty')"
+INGEST_ID="$(python3 - "$INGEST_JSON" <<'PY'
+import json, sys
+payload = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    data = json.loads(payload)
+except Exception:
+    data = {}
+print(data.get("ingest_id", ""))
+PY
+)"
 if [[ -z "$INGEST_ID" ]]; then
   echo "Ingest failed: $INGEST_JSON" >&2
   exit 1
@@ -35,8 +45,26 @@ echo "Ingest queued: $INGEST_ID"
 echo -n "Waiting for completion"
 for _ in {1..60}; do
   STATUS_JSON="$(curl -sS "$API_URL/v1/status/$INGEST_ID")"
-  STATUS="$(echo "$STATUS_JSON" | jq -r '.status // empty')"
-  STAGE="$(echo "$STATUS_JSON" | jq -r '.stage // empty')"
+  STATUS="$(python3 - "$STATUS_JSON" <<'PY'
+import json, sys
+payload = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    data = json.loads(payload)
+except Exception:
+    data = {}
+print(data.get("status", ""))
+PY
+)"
+  STAGE="$(python3 - "$STATUS_JSON" <<'PY'
+import json, sys
+payload = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    data = json.loads(payload)
+except Exception:
+    data = {}
+print(data.get("stage", ""))
+PY
+)"
   if [[ "$STATUS" == "COMPLETED" ]]; then
     echo
     echo "Ingestion completed at stage $STAGE"
@@ -52,5 +80,14 @@ for _ in {1..60}; do
 done
 
 echo "Verifying OpenSearch documents..."
-COUNT="$(curl -sS "http://localhost:9200/rag-chunks/_count?q=metadata.tenant_id:$TENANT" | jq -r '.count')"
+COUNT="$(python3 - "$(curl -sS "http://localhost:9200/rag-chunks/_count?q=tenant_id:%22$TENANT%22")" <<'PY'
+import json, sys
+payload = sys.argv[1] if len(sys.argv) > 1 else "{}"
+try:
+    data = json.loads(payload)
+except Exception:
+    data = {}
+print(data.get("count", 0))
+PY
+)"
 echo "rag-chunks count for $TENANT: $COUNT"

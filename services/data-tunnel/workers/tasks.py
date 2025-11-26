@@ -260,7 +260,10 @@ def chunk_embed(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
         strategy.update({k: override[k] for k in override if k in {"max_tokens", "overlap_tokens"}})
     chunk_texts = semantic_chunks(canonical.get("text", ""), strategy)
     chunk_payloads: List[Dict[str, Any]] = []
-    chunk_metadata_source = canonical.get("metadata", {}) or {}
+    manifest_metadata = manifest.metadata or {}
+    canonical_metadata = canonical.get("metadata", {}) or {}
+    chunk_metadata_source = dict(manifest_metadata)
+    chunk_metadata_source.update(canonical_metadata)
     common_meta = {
         "owner": canonical.get("owner"),
         "doc_type": canonical.get("doc_type"),
@@ -269,7 +272,33 @@ def chunk_embed(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
     pages = canonical.get("pages")
     for idx, text in enumerate(chunk_texts):
         chunk_metadata = dict(chunk_metadata_source)
-        chunk_object = chunk_metadata.get("object")
+        for key in (
+            "path",
+            "raw_path",
+            "object",
+            "object_suffix",
+            "original_basename",
+            "filename",
+            "document_id",
+        ):
+            chunk_metadata.pop(key, None)
+        object_suffix = (
+            manifest.original_basename
+            or manifest.object_suffix
+            or canonical_metadata.get("object_suffix")
+            or manifest_metadata.get("object_suffix")
+            or "document.txt"
+        )
+        s3_uri = f"s3://{_settings.s3_bucket}/{tenant_id}/landing/{ingest_id}/raw/{object_suffix}"
+        chunk_metadata["path"] = s3_uri
+        chunk_metadata["raw_path"] = s3_uri
+        chunk_metadata["object"] = manifest.object_key
+        chunk_metadata["object_suffix"] = object_suffix
+        chunk_metadata["original_basename"] = manifest.original_basename or object_suffix
+        chunk_metadata.setdefault("filename", manifest.original_basename or object_suffix)
+        chunk_metadata.setdefault("doc_type", manifest.doc_type)
+        chunk_metadata.setdefault("document_id", canonical.get("doc_id", ingest_id))
+        chunk_object = manifest.object_key
         if isinstance(pages, list) and idx < len(pages):
             chunk_metadata.setdefault("page", idx)
         chunk_hash = hashlib.sha1(
@@ -295,11 +324,8 @@ def chunk_embed(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
 
     if chunk_payloads:
         _record_chunks(tenant_id, canonical.get("doc_id", ingest_id), chunk_payloads)
-        embeddings = generate_embeddings([c["text"] for c in chunk_payloads])
-    else:
-        embeddings = []
 
-    canonical.update({"chunks": chunk_payloads, "embeddings": embeddings})
+    canonical.update({"chunks": chunk_payloads, "embeddings": []})
     mark_stage_complete(ingest_id, tenant_id, stage)
     celery.signature("workers.tasks.index_publish", args=(ingest_id, canonical)).delay()
     return canonical
@@ -315,10 +341,19 @@ def index_publish(ingest_id: str, canonical: Dict[str, Any]) -> Dict[str, Any]:
     transition_processing(ingest_id, tenant_id, stage)
 
     chunks = canonical.get("chunks", [])
-    embeddings = canonical.get("embeddings", [])
+    embeddings = []
+    if chunks:
+        logger.info(
+            "Generating embeddings for ingest_id=%s (%d chunks)",
+            ingest_id,
+            len(chunks),
+        )
+        embeddings = generate_embeddings([chunk.get("text", "") for chunk in chunks])
+        canonical["embeddings"] = embeddings
     try:
         upsert_vectors(chunks, embeddings, tenant_id)
         index_bm25(chunks, embeddings, tenant_id)
+        logger.info("Indexed %d chunks into OpenSearch", len(chunks))
     except Exception as exc:
         if not stage_completed(ingest_id, stage):
             transition_failed(ingest_id, tenant_id, stage, str(exc))

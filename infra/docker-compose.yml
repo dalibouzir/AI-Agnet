@@ -23,6 +23,15 @@ services:
     ports:
       - "6379:6379"
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -65,6 +74,7 @@ services:
       - opensearch-data:/usr/share/opensearch/data
 
   opensearch-dashboards:
+    profiles: ["observability"]
     image: opensearchproject/opensearch-dashboards:2.13.0
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
@@ -87,6 +97,7 @@ services:
       - "8222:8222"
 
   prometheus:
+    profiles: ["observability"]
     image: prom/prometheus:latest
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -94,6 +105,7 @@ services:
       - "9090:9090"
 
   grafana:
+    profiles: ["observability"]
     image: grafana/grafana:latest
     environment:
       GF_SECURITY_ADMIN_USER: admin
@@ -108,6 +120,7 @@ services:
       - prometheus
 
   redis-exporter:
+    profiles: ["observability"]
     image: oliver006/redis_exporter:latest
     command: ["--redis.addr=redis:6379"]
     depends_on:
@@ -116,6 +129,7 @@ services:
       - "9121:9121"
 
   postgres-exporter:
+    profiles: ["observability"]
     image: prometheuscommunity/postgres-exporter
     environment:
       DATA_SOURCE_NAME: 'postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable'
@@ -125,6 +139,7 @@ services:
       - "9187:9187"
 
   opensearch-exporter:
+    profiles: ["observability"]
     image: docker.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
     command: ['--es.uri=http://opensearch:9200']
     depends_on:
@@ -134,6 +149,7 @@ services:
       - "9114:9114"
 
   traefik:
+    profiles: ["observability"]
     image: traefik:v3.1
     command:
       - --providers.file.filename=/etc/traefik/traefik.yml
@@ -168,6 +184,7 @@ services:
       - "8006:8000"
 
   data-tunnel-worker:
+    profiles: ["ingest-worker"]
     build:
       context: ..
       dockerfile: services/data-tunnel/Dockerfile
@@ -178,10 +195,42 @@ services:
       ENABLE_OCR: "true"
       OCR_LANGS: "eng+fra"
       PARSERS: "pdf,docx,txt,csv,pptx,xlsx,image,json"
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_OLLAMA_URL: ${EMBEDDING_OLLAMA_URL:-http://ollama:11434}
+      TENANT_NAMESPACE: ${TENANT_NAMESPACE:-tenant-demo}
+      OPENSEARCH_HOST: ${OPENSEARCH_HOST:-infra-opensearch-1}
+      OPENSEARCH_PORT: ${OPENSEARCH_PORT:-9200}
     depends_on:
       - data-tunnel
       - redis
       - db
+      - ollama
+    restart: unless-stopped
+
+  data-tunnel-worker-parallel:
+    profiles: ["ingest-worker"]
+    build:
+      context: ..
+      dockerfile: services/data-tunnel/Dockerfile
+    command: celery -A celery_app.celery worker --loglevel=info
+    env_file:
+      - ../.env
+    environment:
+      ENABLE_OCR: "true"
+      OCR_LANGS: "eng+fra"
+      PARSERS: "pdf,docx,txt,csv,pptx,xlsx,image,json"
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_OLLAMA_URL: ${EMBEDDING_OLLAMA_URL:-http://ollama:11434}
+      TENANT_NAMESPACE: ${TENANT_NAMESPACE:-tenant-demo}
+      OPENSEARCH_HOST: ${OPENSEARCH_HOST:-infra-opensearch-1}
+      OPENSEARCH_PORT: ${OPENSEARCH_PORT:-9200}
+    depends_on:
+      - data-tunnel
+      - redis
+      - db
+      - ollama
     restart: unless-stopped
 
   orchestrator:
@@ -202,22 +251,38 @@ services:
       dockerfile: services/rag/Dockerfile
     env_file:
       - ../.env
+    environment:
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_OLLAMA_URL: ${EMBEDDING_OLLAMA_URL:-http://ollama:11434}
+      TENANT_NAMESPACE: ${TENANT_NAMESPACE:-tenant-demo}
+      OPENSEARCH_HOST: ${OPENSEARCH_HOST:-infra-opensearch-1}
+      OPENSEARCH_PORT: ${OPENSEARCH_PORT:-9200}
     depends_on:
       opensearch:
         condition: service_healthy
       minio:
         condition: service_started
-      llm:
+      llm-api:
         condition: service_started
     ports:
       - "8002:8000"
 
-  llm:
+  llm-api:
     build:
       context: ..
-      dockerfile: services/llm/Dockerfile
+      dockerfile: services/llm_api/Dockerfile
     env_file:
       - ../.env
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL:-ft:gpt-4o-mini-2024-07-18:esprit:ai-business-agent-v1:CaIy8Jh2}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      MODEL_NAME: ${MODEL_NAME:-ft:gpt-4o-mini-2024-07-18:esprit:ai-business-agent-v1:CaIy8Jh2}
+      PROFILE: ${PROFILE:-business_default}
+    depends_on:
+      - ollama
     ports:
       - "8003:8000"
 
@@ -242,24 +307,26 @@ services:
       - "8005:8000"
 
   web:
-    image: node:20-alpine
-    working_dir: /app
-    volumes:
-      - ../apps/web:/app
-    command: sh -c "npm install && npm run dev"
+    build:
+      context: ../apps/web
+    container_name: infra-web-1
+    env_file:
+      - ../.env
     environment:
-      - NEXT_PUBLIC_ORCH_URL=${ORCH_URL}
-      - DATA_TUNNEL_URL=${DATA_TUNNEL_URL}
-      - INTERNAL_DATA_TUNNEL_URL=http://data-tunnel:8000
-    ports:
-      - "3001:3000"
+      NEXT_PUBLIC_API_BASE: http://orchestrator:8000
+      NEXT_PUBLIC_RAG_BASE: http://rag:8000
+      NEXT_PUBLIC_OBSERVABILITY_BASE: http://router:8000
     depends_on:
       - orchestrator
-      - router
-      - data-tunnel
+      - rag
+      - llm-api
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
 
 volumes:
   db-data:
   minio-data:
   grafana-data:
   opensearch-data:
+  ollama:

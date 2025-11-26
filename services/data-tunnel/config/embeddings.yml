@@ -1,4 +1,9 @@
-provider: api
-model: text-embedding-3-small
+provider: auto
+model: nomic-embed-text
+ollama_model: nomic-embed-text
+openai_model: text-embedding-3-small
+host: http://ollama:11434
+url: http://ollama:11434/api/embeddings
 dims: 1536
-batch_size: 64
+batch_size: 128
+timeout: 45

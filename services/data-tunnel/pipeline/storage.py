@@ -93,3 +93,32 @@ def ensure_bucket() -> None:
             _s3_client.create_bucket(Bucket=_settings.s3_bucket)
         else:
             raise
+
+
+def delete_ingest_objects(tenant_id: str, ingest_id: str) -> None:
+    prefix = f"{tenant_id}/landing/{ingest_id}/"
+    continuation_token = None
+    while True:
+        kwargs = {"Bucket": _settings.s3_bucket, "Prefix": prefix}
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+        response = _s3_client.list_objects_v2(**kwargs)
+        contents = response.get("Contents", [])
+        if not contents:
+            break
+        for item in contents:
+            key = item.get("Key")
+            if key:
+                _s3_client.delete_object(Bucket=_settings.s3_bucket, Key=key)
+        if response.get("IsTruncated"):
+            continuation_token = response.get("NextContinuationToken")
+        else:
+            break
+
+
+def generate_presigned_download(key: str, expires_in: int = 900) -> str:
+    return _s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": _settings.s3_bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )

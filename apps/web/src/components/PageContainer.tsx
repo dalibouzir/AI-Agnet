@@ -6,5 +6,5 @@ type PageContainerProps = {
 };
 
 export default function PageContainer({ children, className = '' }: PageContainerProps) {
-  return <div className={`mx-auto w-[min(1180px,92%)] ${className}`}>{children}</div>;
+  return <div className={`w-full px-6 sm:px-8 lg:px-12 xl:px-16 2xl:px-20 ${className}`}>{children}</div>;
 }

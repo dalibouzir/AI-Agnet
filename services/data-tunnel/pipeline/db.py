@@ -132,12 +132,17 @@ pii_reports = Table(
 def init_db() -> None:
     with _engine.connect() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_key TEXT"))
-        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_suffix TEXT"))
-        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS original_basename TEXT"))
-        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS doc_type TEXT"))
-        conn.execute(text("ALTER TABLE manifests ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb"))
     _metadata.create_all(_engine)
+    patch_statements = [
+        "ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_key TEXT",
+        "ALTER TABLE manifests ADD COLUMN IF NOT EXISTS object_suffix TEXT",
+        "ALTER TABLE manifests ADD COLUMN IF NOT EXISTS original_basename TEXT",
+        "ALTER TABLE manifests ADD COLUMN IF NOT EXISTS doc_type TEXT",
+        "ALTER TABLE manifests ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb",
+    ]
+    with _engine.begin() as conn:
+        for statement in patch_statements:
+            conn.execute(text(statement))
 
 
 @contextmanager

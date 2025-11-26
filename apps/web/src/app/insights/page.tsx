@@ -9,7 +9,9 @@ export default function InsightsPage() {
       {items.length ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {items.map((it, i) => (
-            <GlassCard key={i} className="p-6">{/* render */}</GlassCard>
+            <GlassCard key={i} className="p-6 text-sm text-muted">
+              Insight placeholder
+            </GlassCard>
           ))}
         </div>
       ) : (

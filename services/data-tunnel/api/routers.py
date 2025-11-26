@@ -8,12 +8,23 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, UploadFile, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, delete, or_
 
-from pipeline.db import get_session, ingestions, manifests
+from pipeline.db import (
+    get_session,
+    ingestions,
+    manifests,
+    vectors,
+    chunks,
+    dq_reports,
+    pii_reports,
+    lineage_nodes,
+    lineage_edges,
+)
+from pipeline.index import delete_ingest_from_index
 from pipeline.lineage import update_status
 from pipeline.models import IngestionStatus
-from pipeline.storage import put_raw_object, put_manifest
+from pipeline.storage import put_raw_object, put_manifest, delete_ingest_objects, generate_presigned_download
 import logging
 
 logger = logging.getLogger(__name__)
@@ -41,6 +52,7 @@ def _merge_options(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, 
         else:
             result[key] = base[key]
     return result
+
 from workers.tasks import parse_normalize
 
 router = APIRouter()
@@ -301,3 +313,55 @@ async def reindex(request: ReindexRequest) -> JSONResponse:
     update_status(ingest_id, tenant_id, IngestionStatus.QUEUED, stage="reindex_queued")
     parse_normalize.delay(ingest_id)
     return JSONResponse({"ingest_id": ingest_id, "status": "queued"})
+
+
+@router.delete("/v1/ingest/{ingest_id}", status_code=200)
+async def delete_ingest(ingest_id: str, tenant_id: Optional[str] = None) -> JSONResponse:
+    stmt = select(manifests.c.tenant_id).where(manifests.c.ingest_id == ingest_id)
+    with get_session() as session:
+        manifest_row = session.execute(stmt).mappings().first()
+    if not manifest_row:
+        raise HTTPException(status_code=404, detail="Ingestion not found")
+
+    resolved_tenant = tenant_id or manifest_row["tenant_id"]
+    if tenant_id and tenant_id != manifest_row["tenant_id"]:
+        raise HTTPException(status_code=400, detail="tenant_id mismatch")
+
+    with get_session() as session:
+        session.execute(delete(vectors).where(vectors.c.doc_id == ingest_id))
+        session.execute(delete(chunks).where(chunks.c.doc_id == ingest_id))
+        session.execute(delete(dq_reports).where(dq_reports.c.ingest_id == ingest_id))
+        session.execute(delete(pii_reports).where(pii_reports.c.ingest_id == ingest_id))
+        session.execute(
+            delete(lineage_edges).where(
+                or_(lineage_edges.c.parent_id == ingest_id, lineage_edges.c.child_id == ingest_id)
+            )
+        )
+        session.execute(delete(lineage_nodes).where(lineage_nodes.c.ingest_id == ingest_id))
+        session.execute(delete(manifests).where(manifests.c.ingest_id == ingest_id))
+        session.execute(delete(ingestions).where(ingestions.c.ingest_id == ingest_id))
+
+    delete_ingest_objects(resolved_tenant, ingest_id)
+    delete_ingest_from_index(ingest_id, resolved_tenant)
+
+    return JSONResponse({"ingest_id": ingest_id, "status": "deleted"})
+
+
+@router.get("/v1/files/presign")
+async def presign_file(tenant_id: str, object_key: str, expires_in: int = 900) -> JSONResponse:
+    if not tenant_id.strip():
+        raise HTTPException(status_code=400, detail="tenant_id is required")
+    if not object_key.strip():
+        raise HTTPException(status_code=400, detail="object_key is required")
+
+    # Basic guard: ensure the key is within the tenant prefix.
+    expected_prefix = f"{tenant_id}/landing/"
+    if not object_key.startswith(expected_prefix):
+        raise HTTPException(status_code=400, detail="object_key not permitted")
+
+    try:
+        url = generate_presigned_download(object_key, expires_in=expires_in)
+    except Exception as exc:
+        logger.error("Failed to generate presigned URL for %s: %s", object_key, exc)
+        raise HTTPException(status_code=500, detail="Failed to generate download link") from exc
+    return JSONResponse({"url": url, "expires_in": expires_in})

@@ -14,7 +14,7 @@ export default function DataPage() {
         <StatCard label="Avg ingest time" value="1m 42s" hint="p50" />
       </div>
       {hasItems ? (
-        <GlassCard className="p-0 overflow-hidden">{/* table/list goes here */}</GlassCard>
+        <GlassCard className="p-6 text-sm text-muted">Dataset preview placeholder.</GlassCard>
       ) : (
         <EmptyState title="No ingestions yet" desc="Upload files to kick off the pipeline." />
       )}

@@ -17,5 +17,5 @@ const paddingScale: Record<NonNullable<PanelProps['padding']>, string> = {
 export default function Panel({ children, className = '', variant = 'default', padding = 'md' }: PanelProps) {
   const tone = variant === 'secondary' ? 'surface-secondary' : 'surface';
   const paddingClass = paddingScale[padding] ?? paddingScale.md;
-  return <div className={`${tone} ${paddingClass} ${className}`.trim()}>{children}</div>;
+  return <div className={`${tone} ${paddingClass} relative overflow-hidden ${className}`.trim()}>{children}</div>;
 }

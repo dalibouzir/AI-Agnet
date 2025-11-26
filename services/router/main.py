@@ -1,35 +1,47 @@
-"""Router service that forwards client requests to the orchestrator."""
+"""Router service that proxies client requests to the orchestrator."""
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from settings import get_settings
 
 settings = get_settings()
-
 app = FastAPI(title=settings.app_name)
 Instrumentator().instrument(app).expose(app)
 
 
-class AskRequest(BaseModel):
-    query: str
-    top_k: int = Field(default=5, gt=0)
+class QueryRequest(BaseModel):
+    thread_id: Optional[str] = Field(default=None)
+    message: Optional[str] = Field(default=None, min_length=1)
+    query: Optional[str] = Field(default=None, min_length=1)
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize(self) -> "QueryRequest":
+        if not self.message and self.query:
+            self.message = self.query
+        if not self.thread_id:
+            hint = self.meta.get("thread_id") or self.meta.get("threadId")
+            self.thread_id = str(hint) if hint else "default"
+        return self
 
 
-class SourceInfo(BaseModel):
-    source: str
-    score: float
-
-
-class AskResponse(BaseModel):
-    answer: str
-    sources: List[SourceInfo]
+class AssistantResponse(BaseModel):
+    route: str
+    text: str
+    used: Dict[str, Any] = Field(default_factory=dict)
+    citations: List[Dict[str, Any]] = Field(default_factory=list)
+    charts: Optional[Dict[str, Any]] = None
+    memory: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+    telemetry: Dict[str, Any] = Field(default_factory=dict)
+    meta: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _http_status_from_exc(exc: httpx.HTTPError) -> int:
@@ -40,31 +52,35 @@ def _http_status_from_exc(exc: httpx.HTTPError) -> int:
     return status.HTTP_502_BAD_GATEWAY
 
 
-@app.post("/ask", response_model=AskResponse)
-async def ask(request: AskRequest) -> AskResponse:
-    payload = request.model_dump(exclude_none=True)
-    url = f"{settings.orchestrator_url.rstrip('/')}/ask"
+async def _post_to_orchestrator(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    url = f"{settings.orchestrator_url.rstrip('/')}{path}"
+    async with httpx.AsyncClient(timeout=settings.request_timeout_s) as client:
+        response = await client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError("Unexpected orchestrator payload")
+        return data
 
+
+@app.post("/v1/query", response_model=AssistantResponse)
+async def query_router(request: QueryRequest) -> AssistantResponse:
+    if not request.message:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="message is required")
+    payload = {
+        "thread_id": request.thread_id or "default",
+        "message": request.message,
+        "meta": request.meta,
+    }
     try:
-        async with httpx.AsyncClient(timeout=settings.request_timeout_s) as client:
-            response = await client.post(url, json=payload)
-            response.raise_for_status()
+        data = await _post_to_orchestrator("/v1/query", payload)
     except httpx.HTTPError as exc:  # pragma: no cover - external dependency
-        raise HTTPException(
-            status_code=_http_status_from_exc(exc),
-            detail=f"Failed to reach orchestrator service: {exc}",
-        ) from exc
-
-    data = response.json()
-    try:
-        return AskResponse(**data)
-    except Exception as exc:  # pragma: no cover - unexpected payload
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Orchestrator returned an unexpected payload: {exc}",
-        ) from exc
+        raise HTTPException(status_code=_http_status_from_exc(exc), detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return AssistantResponse(**data)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> Dict[str, str]:
     return {"status": "ok"}

@@ -1,105 +1,135 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
-import { ThemeId, useTheme } from '@/app/(theme)/ThemeProvider';
+
+import { AnimatePresence, motion } from 'framer-motion';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ThemePalette, ThemePaletteId, useTheme } from '@/app/(theme)/ThemeProvider';
+import useFocusTrap from '@/hooks/useFocusTrap';
 
 export default function ThemeToggle() {
-  const { theme, setTheme, options } = useTheme();
+  const { palette, palettes, setPalette } = useTheme();
   const [open, setOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverId = `${useId()}-theme-popover`;
 
-  const activeTheme = useMemo(() => options.find((item) => item.id === theme), [options, theme]);
+  useFocusTrap(open, popoverRef, () => setOpen(false));
 
   useEffect(() => {
     if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setOpen(false);
       }
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [open]);
 
-  const handleSelect = (id: ThemeId) => {
-    setTheme(id);
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (popoverRef.current?.contains(target) || buttonRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    window.addEventListener('pointerdown', handlePointer);
+    return () => window.removeEventListener('pointerdown', handlePointer);
+  }, [open]);
+
+  const activePalette = useMemo(
+    () => palettes.find((item) => item.id === palette) ?? palettes[0],
+    [palette, palettes],
+  );
+
+  const handleSelect = (id: ThemePaletteId) => {
+    setPalette(id);
     setOpen(false);
+  };
+
+  const renderPalette = (option: ThemePalette) => {
+    const isActive = option.id === palette;
+    return (
+      <button
+        key={option.id}
+        type="button"
+        onClick={() => handleSelect(option.id)}
+        className={`flex items-center justify-center gap-1.5 rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] p-2 transition-transform duration-200 ease-out focus-visible:[box-shadow:var(--focus-ring)] ${
+          isActive ? 'border-[color:var(--color-primary)] shadow-surface' : 'hover:-translate-y-[1px]'
+        }`}
+        aria-pressed={isActive}
+        aria-label={option.label}
+      >
+        <span className="sr-only">{option.label}</span>
+        <span className="flex items-center gap-1.5" aria-hidden>
+          {option.swatches.map((swatch, index) => (
+            <span
+              key={`${option.id}-swatch-${index}`}
+              className="h-4 w-4 rounded-full border border-[color:var(--border-subtle)] shadow-surface"
+              style={{ backgroundColor: swatch }}
+            />
+          ))}
+        </span>
+      </button>
+    );
   };
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--panel-2)] px-3 py-2 text-sm font-semibold text-muted transition-all duration-fast ease-out hover:-translate-y-px hover:border-[var(--accent)] hover:text-[var(--text)] focus-visible:[box-shadow:var(--focus)]"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-      >
-        Theme
-        <span
-          className="h-6 w-10 rounded-md border border-[var(--border)] shadow-surface"
-          style={{ background: activeTheme?.preview }}
-          aria-hidden
-        />
-      </button>
-
-      {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/45"
-            onClick={() => setOpen(false)}
-            aria-hidden="true"
-          />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Choose theme"
-            className="relative z-10 w-[min(420px,92%)] rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-surface"
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h2 className="font-display text-lg text-[var(--text)]">Choose theme</h2>
-                <p className="text-sm text-muted">5 dark • 4 light palettes</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="h-8 w-8 rounded-full border border-[var(--border)] bg-[var(--panel-2)] text-lg text-muted transition hover:text-[var(--text)] focus-visible:[box-shadow:var(--focus)]"
-                aria-label="Close"
+      <div className="relative inline-flex">
+        <button
+          type="button"
+          ref={buttonRef}
+          onClick={() => setOpen((state) => !state)}
+          className="inline-flex items-center gap-3 rounded-full border border-[color:var(--border-subtle)] bg-[color:var(--surface-muted)] px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.32em] text-muted transition-all duration-200 ease-out hover:-translate-y-px hover:text-[color:var(--text-primary)] focus-visible:[box-shadow:var(--focus-ring)]"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={popoverId}
+        >
+          Theme
+          <span className="flex items-center gap-1" aria-hidden>
+            {activePalette.swatches.map((swatch, index) => (
+              <span
+                key={`${activePalette.id}-badge-${index}`}
+                className="h-3 w-3 rounded-full border border-[color:var(--border-subtle)] shadow-surface"
+                style={{ backgroundColor: swatch }}
+              />
+            ))}
+          </span>
+        </button>
+        <AnimatePresence>
+          {open ? (
+            <motion.div
+              className="absolute right-0 top-[calc(100%+0.5rem)] z-[80] min-w-[176px] px-1 pb-1"
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+            >
+              <motion.div
+                ref={popoverRef}
+                role="dialog"
+                id={popoverId}
+                aria-modal="true"
+                tabIndex={-1}
+                aria-label="Choose theme palette"
+                className="rounded-2xl border border-[color:var(--border-subtle)] bg-[color:var(--surface-raised)] px-3 py-3 shadow-[var(--shadow-elev)]"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
               >
-                ×
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {options.map((option) => {
-                const isActive = option.id === theme;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => handleSelect(option.id)}
-                    className={`group relative flex flex-col items-start gap-2 rounded-xl border px-3 py-3 text-left transition-all duration-fast ease-out focus-visible:[box-shadow:var(--focus)] ${
-                      isActive
-                        ? 'border-[var(--accent)] bg-[var(--panel)] text-[var(--text)] shadow-surface'
-                        : 'border-[var(--border)] bg-[var(--panel-2)] hover:-translate-y-px hover:border-[var(--accent)] hover:text-[var(--text)]'
-                    }`}
-                    aria-pressed={isActive}
-                  >
-                    <span
-                      className="block h-14 w-full rounded-lg"
-                      style={{ background: option.preview }}
-                      aria-hidden
-                    />
-                    <span className="text-sm font-semibold text-[var(--text)]">{option.label}</span>
-                    <span className="text-xs text-muted/75">{option.isDark ? 'Dark' : 'Light'}</span>
-                    {isActive && (
-                      <span className="absolute right-2 top-2 text-sm text-[var(--accent)]">✓</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+                <span className="sr-only" id={`${popoverId}-helper`}>
+                  Select a theme palette. Use arrow keys or tab to navigate, enter to confirm.
+                </span>
+                <div className="grid grid-cols-3 gap-2" aria-describedby={`${popoverId}-helper`}>
+                  {palettes.map(renderPalette)}
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+      </div>
     </>
   );
 }

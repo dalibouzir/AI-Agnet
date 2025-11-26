@@ -1,4 +1,8 @@
 FROM python:3.11-slim
+ENV PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=20 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-fra tesseract-ocr-ara ghostscript qpdf libjpeg-turbo-progs pngquant unpaper poppler-utils curl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY services/data-tunnel/requirements.txt /app/requirements.txt

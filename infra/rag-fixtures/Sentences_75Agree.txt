@@ -1,0 +1,5 @@
+Sentences With ~Seventy-Five Percent Agreement
+----------------------------------------------
+1. **76%** of controllers say the Monte Carlo deck must include explicit ties between the histogram and P5/P50/P95 commentary.
+2. **74%** of FP&A leaders agree we should keep the OpenAI router online even while embeddings run on Ollama for offline resilience.
+3. **75%** of enablement leads insist that every cited chunk list the filename plus the MinIO path so reviewers can re-open the source quickly.

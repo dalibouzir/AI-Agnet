@@ -141,11 +141,42 @@ def index_bm25(chunks: Iterable[dict], embeddings: List[List[float]], tenant_nam
             len(chunk_list),
             len(embeddings),
         )
+    else:
+        sample_len = len(embeddings[0]) if embeddings and isinstance(embeddings[0], list) else 0
+        logger.info(
+            "Indexing %d chunks for tenant=%s (embedding_dim=%d)",
+            len(chunk_list),
+            tenant_namespace,
+            sample_len,
+        )
 
     for chunk_index, (chunk, vector) in enumerate(zip(chunk_list, embeddings)):
         doc_id = chunk["chunk_id"]
+        if vector is None:
+            logger.warning("Skipping chunk %s: embedding missing", doc_id)
+            continue
+        if not isinstance(vector, list):
+            logger.warning("Skipping chunk %s: embedding type %s", doc_id, type(vector).__name__)
+            continue
+        if not vector:
+            logger.warning("Skipping chunk %s: embedding empty list", doc_id)
+            continue
+        if chunk_index == 0:
+            logger.warning(
+                "Sample embedding chunk=%s len=%d first=%s",
+                doc_id,
+                len(vector),
+                vector[:3],
+            )
         metadata_payload = chunk.get("metadata", {}) or {}
         object_ref = chunk.get("object") or metadata_payload.get("object")
+        display_name = (
+            chunk.get("source")
+            or metadata_payload.get("original_basename")
+            or metadata_payload.get("object_suffix")
+            or metadata_payload.get("object")
+            or chunk["doc_id"]
+        )
         body = {
             "chunk_id": chunk["chunk_id"],
             "doc_id": chunk["doc_id"],
@@ -154,6 +185,7 @@ def index_bm25(chunks: Iterable[dict], embeddings: List[List[float]], tenant_nam
             "doc_type": chunk.get("doc_type"),
             "ingested_at": chunk.get("ingested_at"),
             "text": chunk["text"],
+            "source": display_name,
             "section": chunk.get("section_path"),
             "page_start": chunk.get("page_start"),
             "page_end": chunk.get("page_end"),
@@ -169,6 +201,26 @@ def index_bm25(chunks: Iterable[dict], embeddings: List[List[float]], tenant_nam
             logger.warning("OpenSearch index document failed: %s", exc)
 
 
+def delete_ingest_from_index(ingest_id: str, tenant_id: str, client: Optional[OpenSearch] = None) -> None:
+    client = client or _get_os_client()
+    if not client:
+        logger.warning("OpenSearch client unavailable; cannot delete ingest_id=%s", ingest_id)
+        return
+
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"tenant_id": tenant_id}},
+                    {"term": {"doc_id": ingest_id}},
+                ]
+            }
+        }
+    }
+    try:
+        client.delete_by_query(index=INDEX_NAME, body=query, refresh=True)
+    except Exception as exc:
+        logger.warning("OpenSearch delete_by_query failed for ingest_id=%s tenant=%s: %s", ingest_id, tenant_id, exc)
 def _build_citations(text: str) -> List[dict]:
     citations: List[dict] = []
     offset = 0

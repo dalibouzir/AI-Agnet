@@ -1,132 +1,186 @@
 'use client';
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-export type ThemeId =
-  | 'neon-dark'
-  | 'aurora-dark'
-  | 'midnight-dark'
-  | 'ember-dark'
-  | 'cobalt-dark'
-  | 'glacier-light'
-  | 'solar-light'
-  | 'crystal-light'
-  | 'meadow-light';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 
-export type ThemeOption = {
-  id: ThemeId;
+export type ThemeMode = 'light' | 'dark';
+export type ThemePaletteId = 'light-a' | 'light-b' | 'light-c' | 'dark-a' | 'dark-b' | 'dark-c';
+
+export type ThemePalette = {
+  id: ThemePaletteId;
+  mode: ThemeMode;
   label: string;
   description: string;
-  isDark: boolean;
-  preview: string;
+  swatches: [string, string, string];
 };
 
-export const THEME_OPTIONS: ThemeOption[] = [
+type ThemePreferences = {
+  mode: ThemeMode;
+  palette: ThemePaletteId;
+  lightPalette: ThemePaletteId;
+  darkPalette: ThemePaletteId;
+};
+
+type ThemeContextValue = {
+  mode: ThemeMode;
+  palette: ThemePaletteId;
+  palettes: ThemePalette[];
+  setMode: (mode: ThemeMode) => void;
+  setPalette: (palette: ThemePaletteId) => void;
+};
+
+const THEME_PALETTES: ThemePalette[] = [
   {
-    id: 'neon-dark',
-    label: 'Neon Dark',
-    description: 'Cyan + violet glow accents',
-    isDark: true,
-    preview: 'linear-gradient(135deg, #00E5FF 0%, #6BFFB8 50%, #A78BFA 100%)',
+    id: 'light-a',
+    mode: 'light',
+    label: 'Light · Blue / Red',
+    description: 'Blue primary with red accent over white surfaces.',
+    swatches: ['#0D6EFD', '#E63946', '#FFFFFF'],
   },
   {
-    id: 'aurora-dark',
-    label: 'Aurora Dark',
-    description: 'Emerald gradients with violet highlights',
-    isDark: true,
-    preview: 'linear-gradient(135deg, #09FBD3 0%, #7CFF9A 50%, #8F7BFF 100%)',
+    id: 'light-b',
+    mode: 'light',
+    label: 'Light · Indigo / Coral',
+    description: 'Indigo primary, coral accent, mist neutral.',
+    swatches: ['#4F46E5', '#FF6B6B', '#F7F7FB'],
   },
   {
-    id: 'midnight-dark',
-    label: 'Midnight Dark',
-    description: 'Deep indigo with ice-blue accents',
-    isDark: true,
-    preview: 'linear-gradient(135deg, #0A0F29 0%, #1C2C5B 50%, #5AB7FF 100%)',
+    id: 'light-c',
+    mode: 'light',
+    label: 'Light · Teal / Vermilion',
+    description: 'Teal primary with vermilion accent on porcelain base.',
+    swatches: ['#0EA5A4', '#E64A19', '#FAFAFC'],
   },
   {
-    id: 'ember-dark',
-    label: 'Ember Dark',
-    description: 'Charcoal base with ember highlights',
-    isDark: true,
-    preview: 'linear-gradient(135deg, #1A0B0B 0%, #331010 45%, #FF5E3A 100%)',
+    id: 'dark-a',
+    mode: 'dark',
+    label: 'Dark · Cyan / Soft Red',
+    description: 'Cyan primary and soft red accent over deep navy.',
+    swatches: ['#00BFFF', '#FF4D4D', '#0A0F1C'],
   },
   {
-    id: 'cobalt-dark',
-    label: 'Cobalt Dark',
-    description: 'Electric blues with teal sparks',
-    isDark: true,
-    preview: 'linear-gradient(135deg, #061B2F 0%, #0B3A53 50%, #00F6FF 100%)',
+    id: 'dark-b',
+    mode: 'dark',
+    label: 'Dark · Violet / Rose',
+    description: 'Violet primary with rose accent on charcoal.',
+    swatches: ['#7C3AED', '#FB7185', '#0B1220'],
   },
   {
-    id: 'glacier-light',
-    label: 'Glacier Light',
-    description: 'Cool blues with frosted panels',
-    isDark: false,
-    preview: 'linear-gradient(135deg, #1D9BF0 0%, #7CD8FF 50%, #6C89FF 100%)',
-  },
-  {
-    id: 'solar-light',
-    label: 'Solar Light',
-    description: 'Warm amber with ivory surfaces',
-    isDark: false,
-    preview: 'linear-gradient(135deg, #FF9F1C 0%, #FFD166 50%, #FF6F59 100%)',
-  },
-  {
-    id: 'crystal-light',
-    label: 'Crystal Light',
-    description: 'Prismatic lilac with silver edges',
-    isDark: false,
-    preview: 'linear-gradient(135deg, #E8E4FF 0%, #CBC7FF 45%, #A88CFF 100%)',
-  },
-  {
-    id: 'meadow-light',
-    label: 'Meadow Light',
-    description: 'Soft greens with sunlit highlights',
-    isDark: false,
-    preview: 'linear-gradient(135deg, #E0F9E5 0%, #B3F7C2 45%, #6BDFA6 100%)',
+    id: 'dark-c',
+    mode: 'dark',
+    label: 'Dark · Electric / Magenta',
+    description: 'Electric blue primary with magenta accent on obsidian.',
+    swatches: ['#3B82F6', '#F472B6', '#0C1324'],
   },
 ];
 
-const DEFAULT_THEME: ThemeId = 'neon-dark';
+const DEFAULT_LIGHT: ThemePaletteId = 'light-a';
+const DEFAULT_DARK: ThemePaletteId = 'dark-a';
 
-type ThemeContextValue = {
-  theme: ThemeId;
-  setTheme: (theme: ThemeId) => void;
-  options: ThemeOption[];
+const ThemeCtx = createContext<ThemeContextValue>({
+  mode: 'dark',
+  palette: DEFAULT_DARK,
+  palettes: THEME_PALETTES,
+  setMode: () => {},
+  setPalette: () => {},
+});
+
+const STORAGE_KEY = 'theme-preferences';
+
+const getInitialPreferences = (): ThemePreferences => {
+  if (typeof window === 'undefined') {
+    return { mode: 'dark', palette: DEFAULT_DARK, lightPalette: DEFAULT_LIGHT, darkPalette: DEFAULT_DARK };
+  }
+
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored) as Partial<ThemePreferences>;
+      const hasPalette = typeof parsed.palette === 'string' && THEME_PALETTES.some((item) => item.id === parsed.palette);
+      const hasMode = parsed.mode === 'light' || parsed.mode === 'dark';
+      const lightPalette =
+        typeof parsed.lightPalette === 'string' && THEME_PALETTES.some((item) => item.id === parsed.lightPalette)
+          ? (parsed.lightPalette as ThemePaletteId)
+          : DEFAULT_LIGHT;
+      const darkPalette =
+        typeof parsed.darkPalette === 'string' && THEME_PALETTES.some((item) => item.id === parsed.darkPalette)
+          ? (parsed.darkPalette as ThemePaletteId)
+          : DEFAULT_DARK;
+
+      if (hasPalette && hasMode) {
+        return {
+          mode: parsed.mode as ThemeMode,
+          palette: parsed.palette as ThemePaletteId,
+          lightPalette,
+          darkPalette,
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to parse saved theme preferences.', error);
+  }
+
+  const prefersDark =
+    typeof window !== 'undefined'
+      ? window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      : false;
+
+  return {
+    mode: prefersDark ? 'dark' : 'light',
+    palette: prefersDark ? DEFAULT_DARK : DEFAULT_LIGHT,
+    lightPalette: DEFAULT_LIGHT,
+    darkPalette: DEFAULT_DARK,
+  };
 };
 
-const ThemeCtx = createContext<ThemeContextValue>({ theme: DEFAULT_THEME, setTheme: () => {}, options: THEME_OPTIONS });
-
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<ThemeId>(DEFAULT_THEME);
+  const [preferences, setPreferences] = useState<ThemePreferences>(() => getInitialPreferences());
 
-  const resolvedTheme = useMemo(() => THEME_OPTIONS.find((item) => item.id === theme) ?? THEME_OPTIONS[0], [theme]);
+  const setMode = useCallback((mode: ThemeMode) => {
+    setPreferences((current) => {
+      if (current.mode === mode) return current;
+      const palette = mode === 'light' ? current.lightPalette : current.darkPalette;
+      return { ...current, mode, palette };
+    });
+  }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = localStorage.getItem('theme') as ThemeId | null;
-    if (stored && THEME_OPTIONS.some((item) => item.id === stored)) {
-      setTheme(stored);
-    }
+  const setPalette = useCallback((palette: ThemePaletteId) => {
+    const paletteDefinition = THEME_PALETTES.find((item) => item.id === palette);
+    if (!paletteDefinition) return;
+    setPreferences((current) => {
+      const nextMode = paletteDefinition.mode;
+      return {
+        mode: nextMode,
+        palette,
+        lightPalette: nextMode === 'light' ? palette : current.lightPalette,
+        darkPalette: nextMode === 'dark' ? palette : current.darkPalette,
+      };
+    });
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+  }, [preferences]);
+
+  useEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = resolvedTheme.id;
-    root.classList.toggle('dark', resolvedTheme.isDark);
-    root.classList.toggle('light', !resolvedTheme.isDark);
-    root.style.colorScheme = resolvedTheme.isDark ? 'dark' : 'light';
+    root.dataset.theme = preferences.mode;
+    root.dataset.palette = preferences.palette;
+    root.style.colorScheme = preferences.mode;
+  }, [preferences.mode, preferences.palette]);
 
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('theme', resolvedTheme.id);
-    }
-  }, [resolvedTheme]);
-
-  const contextValue = useMemo<ThemeContextValue>(
-    () => ({ theme: resolvedTheme.id, setTheme, options: THEME_OPTIONS }),
-    [resolvedTheme.id, setTheme],
+  const value = useMemo<ThemeContextValue>(
+    () => ({
+      mode: preferences.mode,
+      palette: preferences.palette,
+      palettes: THEME_PALETTES,
+      setMode,
+      setPalette,
+    }),
+    [preferences.mode, preferences.palette, setMode, setPalette],
   );
 
-  return <ThemeCtx.Provider value={contextValue}>{children}</ThemeCtx.Provider>;
+  return <ThemeCtx.Provider value={value}>{children}</ThemeCtx.Provider>;
 }
 
 export const useTheme = () => useContext(ThemeCtx);

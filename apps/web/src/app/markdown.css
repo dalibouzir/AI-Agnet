@@ -1,0 +1,100 @@
+.chat-markdown {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.chat-markdown--user {
+  color: var(--text-primary);
+}
+
+.chat-markdown__heading {
+  font-size: 1rem;
+  font-weight: 700;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.chat-markdown__paragraph {
+  line-height: 1.6;
+}
+
+.chat-markdown__list {
+  margin-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.chat-markdown__list--ordered {
+  list-style-type: decimal;
+}
+
+.chat-markdown__list-item {
+  line-height: 1.5;
+}
+
+.chat-markdown__blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--color-primary) 60%, transparent 40%);
+  padding-left: 0.75rem;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.chat-markdown__table-wrapper {
+  width: 100%;
+  overflow: auto;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-muted) 90%, transparent 10%);
+}
+
+.chat-markdown__table-wrapper table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.chat-markdown__table-cell {
+  padding: 0.65rem 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.chat-markdown__table-cell--header {
+  text-align: left;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--surface-muted) 80%, var(--color-primary) 20%);
+}
+
+.chat-markdown__divider {
+  border: none;
+  border-top: 1px dashed var(--border-subtle);
+  margin: 0.5rem 0;
+}
+
+.chat-markdown__code-inline {
+  background: color-mix(in srgb, var(--surface-muted) 70%, transparent 30%);
+  border-radius: 0.4rem;
+  padding: 0.1rem 0.4rem;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+  font-size: 0.85rem;
+}
+
+.chat-markdown__code-block {
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--surface-muted) 70%, var(--color-primary) 30%);
+  padding: 1rem;
+  overflow-x: auto;
+  font-family: "JetBrains Mono", "SFMono-Regular", ui-monospace, "Menlo", monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.chat-markdown__link {
+  color: color-mix(in srgb, var(--color-primary) 80%, var(--text-primary) 20%);
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}

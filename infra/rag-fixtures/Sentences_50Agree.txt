@@ -1,0 +1,5 @@
+Sentences With ~Fifty Percent Agreement
+--------------------------------------
+1. **52%** of regional sales managers want the RAG writer to default to action lists rather than long prose.
+2. **49%** of ops leaders think we should raise the retrieval Top-K above five when documents are mostly slide decks.
+3. **51%** of analysts note that finance queries often need both `financials.csv` and `all-data.csv` cited together for context.

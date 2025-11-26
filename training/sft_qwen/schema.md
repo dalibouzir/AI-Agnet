@@ -1,0 +1,4 @@
+- Each record is a JSON object with a `messages` array.
+- Messages follow the OpenAI chat format (`role` ∈ {"system","user","assistant"}).
+- Assistant responses must follow the Executive Summary → Key Facts → Why It Matters → Next Best Actions template.
+- Cite numeric facts with their tags (e.g., `[S&P500 | TICKER | YEAR]`). Use `Not found in context` when data is missing.

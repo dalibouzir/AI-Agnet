@@ -1,0 +1,6 @@
+Metric,Value,Source,Notes
+Active Customers,1847,all-data.csv,"Mix of 62% enterprise, 38% upper mid-market"
+Net Revenue Retention,112%,financials.csv,"Boosted by expansion bundles documented in README.txt"
+AI Copilot Attach Rate,58%,Sentences_AllAgree.txt,"Every new workflow now expects AI assist per README guidance"
+Embedding Provider,nomic-embed-text,README.txt,"Runs on Ollama; OpenAI reserved for routing and answers"
+Risk Trials Default,10000,README.txt,"Histogram metadata stored with each Monte Carlo run"

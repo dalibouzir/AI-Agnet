@@ -1,7 +1,0 @@
-fastapi==0.114.2
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-python-dotenv==1.0.1
-prometheus-fastapi-instrumentator==6.0.0
-prometheus-client==0.20.0
-openai==1.47.0

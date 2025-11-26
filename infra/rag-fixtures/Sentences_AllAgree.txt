@@ -1,0 +1,5 @@
+Statements With Near-Unanimous Support
+--------------------------------------
+1. **94%** of leadership agrees that every narrative must cite at least one file when answering questions rooted in the knowledge base.
+2. **96%** agree the risk workflow should always report the trial count plus probability of negative operating income.
+3. **98%** agree logs must capture stage names—parse_normalize → pii_dq → chunk_embed → index_publish—for every ingest job.
